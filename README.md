@@ -110,7 +110,7 @@ Open your terminal (or Developer Command Prompt / PowerShell on Windows) and run
 
 ### Clone the repository
 ```text
-git clone https://github.com/yourusername/e-XSpice.git
+git clone https://github.com/Gabriel-H-R/e-XSpice.git
 cd e-XSpice
 ```
 

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(CircuitSim VERSION 1.0.0 LANGUAGES CXX)
+project(e-XSpice VERSION 1.0.0 LANGUAGES CXX)
 
 # C++17 is required for modern features
 set(CMAKE_CXX_STANDARD 17)
@@ -45,7 +45,7 @@ file(GLOB_RECURSE PARALLEL_SOURCES
 )
 
 # Create static library with all components
-add_library(circuitsim_lib STATIC
+add_library(e-XSpice_lib STATIC
     ${CORE_SOURCES}
     ${DEVICE_SOURCES}
     ${ANALYSIS_SOURCES}
@@ -54,20 +54,20 @@ add_library(circuitsim_lib STATIC
 )
 
 # Link MPI and OpenMP to the library
-target_link_libraries(circuitsim_lib 
+target_link_libraries(e-XSpice_lib 
     PUBLIC 
     ${MPI_CXX_LIBRARIES}
     OpenMP::OpenMP_CXX
 )
 
-target_compile_options(circuitsim_lib 
+target_compile_options(e-XSpice_lib 
     PUBLIC 
     ${MPI_CXX_COMPILE_FLAGS}
 )
 
 # Main executable
-add_executable(circuitsim src/main.cpp)
-target_link_libraries(circuitsim circuitsim_lib)
+add_executable(e-XSpice src/main.cpp)
+target_link_libraries(e-XSpice e-XSpice_lib)
 
 # Option to compile tests
 option(BUILD_TESTS "Build test programs" ON)
