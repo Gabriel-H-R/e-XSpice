@@ -1,0 +1,16 @@
+* Multi-Loop Circuit
+* Complex network with multiple paths
+* Tests solver robustness
+
+V1 1 0 DC 12
+R1 1 2 1k
+R2 2 3 2k
+R3 3 0 1.5k
+R4 2 4 3k
+R5 4 0 2.5k
+R6 3 4 1k
+
+I1 0 4 DC 1m
+
+.OP
+.END

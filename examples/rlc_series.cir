@@ -1,0 +1,12 @@
+* RLC Series Circuit
+* Series resonant circuit: R=100Ω, L=10mH, C=1uF
+* Resonance frequency: f0 = 1/(2π√LC) ≈ 1.59kHz
+* Quality factor: Q = ωL/R ≈ 1
+
+V1 1 0 DC 10
+R1 1 2 100
+L1 2 3 10m IC=0
+C1 3 0 1u IC=0
+
+.TRAN 10u 10m 0
+.END

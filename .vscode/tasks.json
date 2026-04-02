@@ -1,0 +1,29 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Compile complete e-XSpice",
+            "type": "shell",
+            "command": "g++",
+            "args": [
+                "-g",
+                "${workspaceFolder}/src/*.cpp",
+                "${workspaceFolder}/src/parallel/*.cpp",
+                "${workspaceFolder}/src/analysis/*.cpp",
+                "${workspaceFolder}/src/solver/*.cpp",
+                "${workspaceFolder}/src/devices/*.cpp",
+                "${workspaceFolder}/src/core/*.cpp",
+                "-o",
+                "${workspaceFolder}/src/output/main.exe",
+                "-I", "D:/Program Files (x86)/Microsoft SDKs/MPI/Include",
+                "-L", "D:/Program Files (x86)/Microsoft SDKs/MPI/Lib/x64",
+                "-lmsmpi"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"]
+        }
+    ]
+}

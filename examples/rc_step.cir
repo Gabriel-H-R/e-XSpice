@@ -1,0 +1,11 @@
+* RC Circuit - Step Response
+* 5V step input through 1k resistor to 1uF capacitor
+* Time constant τ = RC = 1ms
+* V(1) = 5V × (1 - e^(-t/τ))
+
+V1 1 0 DC 5
+R1 1 2 1k
+C1 2 0 1u IC=0
+
+.TRAN 10u 5m 0
+.END

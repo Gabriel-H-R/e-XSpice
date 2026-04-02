@@ -1,0 +1,10 @@
+* Voltage Divider Circuit
+* Simple resistor divider: 10V source with 1k and 2k resistors
+* Expected: V(1) = 6.667V
+
+V1 1 0 DC 10
+R1 1 2 1k
+R2 2 0 2k
+
+.OP
+.END
