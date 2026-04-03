@@ -239,7 +239,7 @@ See the ```LICENSE``` file for details.
 
 ### Core Resources
 - [SPICE (UC Berkeley)](https://people.eecs.berkeley.edu/~newton/spice/)
-- [ngspice] (https://ngspice.sourceforge.io)
+- [ngspice](https://ngspice.sourceforge.io)
 - [Xyce Parallel Electronic Simulator](https://xyce.sandia.gov/)
 
 ### Books (Circuit Simulation & SPICE)
