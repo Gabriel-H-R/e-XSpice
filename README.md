@@ -15,6 +15,7 @@ This project explores the intersection of numerical analysis, sparse matrix comp
 - [Mathematical Foundation (MNA)](#-mathematical-foundation-mna)
 - [Software Architecture](#-software-architecture)
 - [Building and Compilation](#-building-and-compilation)
+- [Testing](#-testing)
 - [Usage Examples](#-usage-examples)
 - [Parallelization Strategy](#-parallelization-strategy)
 - [Development Roadmap](#-development-roadmap)
@@ -24,11 +25,12 @@ This project explores the intersection of numerical analysis, sparse matrix comp
 ## ✨ Core Features
 
 ### 🧮 Numerical & Simulation Capabilities
-- **Analysis Types:** DC Operating Point Analysis (Transient and AC in development).
+- **SPICE Netlist Parser:** Native support for parsing `.cir` and standard SPICE netlist files.
+- **Analysis Types:** - **DC Operating Point Analysis (.OP):** Steady-state resolution of linear and multi-loop networks.
+  - **Transient Analysis (.TRAN):** Time-domain simulation using Numerical Integration (backward Euler method) for time-dependent devices (Capacitors and Inductors).
 - **Formulation:** Modified Nodal Analysis (MNA) for robust linear system modeling.
 - **Iterative Solvers:** Custom implementations of Conjugate Gradient (CG) and BiCGSTAB, optimized for sparse matrices.
-- **Matrix Formats:** Compressed Sparse Row (CSR) and Coordinate List (COO) for memory-efficient matrix assembly.
-- **Supported Devices:** Ideal Resistors, Independent Voltage Sources, Independent Current Sources.
+- **Supported Devices:** Ideal Resistors, Capacitors, Inductors, Independent Voltage Sources, and Independent Current Sources.
 
 ### 🚀 High-Performance Computing (HPC)
 - **Hybrid Architecture:** Distributed memory scaling across nodes via **MPI**, coupled with shared-memory thread parallelism within nodes via **OpenMP**.
@@ -43,20 +45,11 @@ e-XSpice relies on Modified Nodal Analysis (MNA) to formulate the circuit equati
 $$\mathbf{G} \mathbf{x} = \mathbf{b}$$
 
 Where:
-* $$\mathbf{G}$$ is the Conductance/Incidence matrix (sparse, symmetric for pure linear resistor circuits).
+* $$\mathbf{G}$$ is the Conductance/Incidence matrix.
 * $$\mathbf{x}$$ is the vector of unknown node voltages and branch currents of voltage-defined devices.
-* $$\mathbf{b}$$ is the vector of known independent source values (currents and voltages).
+* $$\mathbf{b}$$ is the vector of known independent source values.
 
-### Stamping Examples
-
-For a **Resistor** ($R$) with conductance $g = 1/R$ connected between nodes $i$ and $j$:
-$$G_{i,i} \mathrel{+}= g \quad G_{i,j} \mathrel{-}= g$$
-$$G_{j,i} \mathrel{-}= g \quad G_{j,j} \mathrel{+}= g$$
-
-For a **Voltage Source** ($V$) between nodes $i$ and $j$, an auxiliary current variable $k$ is introduced:
-$$G_{i,k} = 1 \quad G_{k,i} = 1$$
-$$G_{j,k} = -1 \quad G_{k,j} = -1$$
-$$b_k = V$$
+For Transient Analysis, the companion model approach is used, transforming differential equations of dynamic components ($C$, $L$) into equivalent discrete-time resistive circuits for each time step.
 
 ---
 
@@ -65,17 +58,17 @@ $$b_k = V$$
 ```text
 e-XSpice/
 ├── src/
-│   ├── core/           # Circuit topology, Node management, Device base classes
-│   ├── devices/        # Physical models (Resistor, VoltageSource, etc.)
-│   ├── analysis/       # Simulation engines (DCAnalysis, ACAnalysis...)
-│   ├── solver/         # Numerical linear algebra (BiCGSTAB, CG, CSR/COO structures)
+│   ├── core/           # Circuit topology, Node management, SPICE Parser
+│   ├── devices/        # Physical models (Resistor, Capacitor, Inductor, etc.)
+│   ├── analysis/       # Simulation engines (DCAnalysis, TransientAnalysis)
+│   ├── solver/         # Numerical linear algebra (BiCGSTAB, CG)
 │   ├── parallel/       # MPI communicator wrappers and OpenMP pragmas
 │   └── main.cpp        # CLI entry point
-├── tests/              # CTest-based unit tests
-├── examples/           # Benchmark circuits and netlists
-└── CMakeLists.txt      # CMake configuration
-```
+├── tests/              # Independent CTest-based unit tests
+├── examples/           # Benchmark circuits and .cir netlists
+└── CMakeLists.txt      # Main CMake configuration
 ---
+```
 
 ## 🛠️ Building and Compilation 
 
@@ -92,71 +85,100 @@ The project uses a modern **CMake workflow**, ensuring a seamless and unified bu
 
 ---
 
-### 2. Environment Setup
-
-#### Windows
-- Ensure your C++ compiler (MinGW or MSVC via Visual Studio Build Tools) is in your `PATH`
-- If using VS Code, the **CMake Tools** extension is highly recommended
-
-#### Linux (Ubuntu/Debian)
-```bash
-sudo apt-get update
-sudo apt-get install cmake build-essential libopenmpi-dev openmpi-bin
-```
-
 ### Cross-Platform Compilation
 
 Open your terminal (or Developer Command Prompt / PowerShell on Windows) and run:
 
 ### Clone the repository
 ```text
-git clone https://github.com/Gabriel-H-R/e-XSpice.git
+git clone [https://github.com/Gabriel-H-R/e-XSpice.git](https://github.com/Gabriel-H-R/e-XSpice.git)
 cd e-XSpice
 ```
 
-### Configure the project
-```text
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-```
+### Compilation Details
 
-### Build using all cores
+💻 Windows (Using MinGW / Git Bash)
+
+Ensure your MinGW compiler and MS-MPI paths are properly configured in your system's `PATH`
+
 ```text
+# Generate build files for MinGW
+cmake -S . -B build -G "MinGW Makefiles"
+
+# Compile using multiple CPU cores
 cmake --build build --config Release -j
 ```
 
-After compilation, the executable will be located at:
+🐧 Linux (Ubuntu / Debian)
+
+Install the required dependencies:
+
 
 ```text
-./build/e-xspice        (Linux/macOS)
-./build/e-xspice.exe    (Windows)
+sudo apt-get update
+sudo apt-get install cmake build-essential libopenmpi-dev openmpi-bin
 ```
 
+Compile the project:
+
+```text
+# Generate standard Unix Makefiles
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+# Compile using all available cores
+cmake --build build -j $(nproc)
+```
 ---
+
+## 🧪 Testing
+
+e-XSpice includes a suite of automated unit tests to validate the physical accuracy of the solvers against expected SPICE results. To run the tests using **CTest**:
+
+```text
+cd build
+ctest --output-on-failure
+```
 
 ## 💻 Usage Examples
 
-In the examples folder you are going to find some examples circuits.
+In the `examples/` folder, you will find some benchmark circuits and `.cir` netlists. After compilation, the executable will be located in the `build/` directory (`e-XSpice` on Linux/macOS, `e-XSpice.exe` on Windows).
 
-Running the CLI Engine
+### Mode 1: Simulating Custom Netlists (.cir)
 
-### Example 1: Serial execution
+You can run a custom SPICE netlist by passing the `file` argument:
 
 ```text
-./build/e-xspice 1
+# Running an RC Step Response (Transient Analysis)
+./build/e-XSpice file ./examples/rc_step.cir
+
+# Running a Multi-loop Resistor Network (DC Analysis)
+./build/e-XSpice file ./examples/multiloop.cir
 ```
 
-### Example 2: Distributed MPI execution (4 processes and 1000 resistors)
+### Mode 2: Programmatic Examples & MPI
+
+The simulator also contains hardcoded examples for scalability testing.
+
+**Serial Execution**
 
 ```text
-mpiexec -np 4 ./build/e-xspice 3 1000
+./build/e-XSpice 1
+```
+
+**Distributed MPI Execution (setting 4 processes and 1k resistors)**
+
+```text
+mpiexec -np 4 ./build/e-XSpice 3 1000
 ```
 
 Note:
 
-On Linux, you may use **mpirun** instead of **mpiexec**
-On Windows (MS-MPI), always use **mpiexec**
+On Linux, you may use `mpirun` instead of `mpiexec`
+On Windows (MS-MPI), always use `mpiexec`
 
 ### OpenMP Thread Control
+
+You can control the shared-memory parallelism by setting the `OMP_NUM_THREADS` environment variable before execution.
 
 Windows (PowerShell)
 
@@ -171,11 +193,7 @@ Linux (Bash)
 export OMP_NUM_THREADS=4
 mpiexec -np 2 ./build/e-xspice 3 10000
 ```
-Total computation footprint:
 
-```text
-2 MPI processes × 4 OpenMP threads = 8 logical cores
-```
 ---
 
 ## ⚡ Parallelization Strategy
@@ -184,7 +202,7 @@ Total computation footprint:
 
 - Distributes circuit devices across processes
 - Each process assembles a local portion of the global conductance matrix (G)
-- Uses MPI_Allreduce for synchronization during iterative solving
+- Uses `MPI_Allreduce` for synchronization during iterative solving
 
 ### OpenMP (Shared Memory)
 
@@ -193,10 +211,10 @@ Total computation footprint:
 
 ### Scalability Profile
 
-- For large circuits (>10k nodes), hybrid parallelism:
+- For large circuits (>10k nodes), the hybrid parallelism footprint:
 
 ```text
-4 MPI ranks × 4 OpenMP threads
+4 MPI ranks × 4 OpenMP threads = 16 logical cores
 ```
 
 achieves ~10–12× speedup vs serial execution
@@ -204,10 +222,10 @@ achieves ~10–12× speedup vs serial execution
 
 ## 🗺️ Next Steps (Development Roadmap)
  - [ ] Non-linear devices (Diodes + Newton-Raphson)
- - [ ] Transient Analysis (time integration)
+ - [ ] MOSFET Basic Quadratic model
+ - [ ] BJT Basic Exponencial model
  - [ ] AC Analysis (frequency domain)
  - [ ] MOSFET (BSIM) models
- - [ ] SPICE netlist parser (.cir, .sp)
  - [ ] Preconditioning (ILU)
  - [ ] Graph partitioning (METIS)
 

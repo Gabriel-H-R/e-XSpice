@@ -1,0 +1,20 @@
+# Ignorar a pasta de compilação do CMake
+build/
+out/
+bin/
+
+# Ignorar arquivos compilados e temporários gerais de C/C++
+*.o
+*.obj
+*.exe
+*.dll
+*.lib
+*.a
+*.so
+*.dylib
+
+# Ignorar configurações locais da sua IDE (ex: VS Code)
+.vscode/
+
+# Ignorar arquivos de log que podem ser gerados
+*.log
