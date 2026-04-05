@@ -1,4 +1,4 @@
-# ⚡ e-XSpice: High-Performance Parallel Circuit Simulator
+# e-XSpice: High-Performance Parallel Circuit Simulator
 
 ![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)
 ![CMake](https://img.shields.io/badge/CMake-3.15%2B-success.svg)
@@ -10,7 +10,7 @@
 
 This project explores the intersection of numerical analysis, sparse matrix computation, and distributed systems, providing a foundation for modern Electronic Design Automation (EDA) tools.
 
-## 📋 Table of Contents
+## Table of Contents
 - [Core Features](#-core-features)
 - [Mathematical Foundation (MNA)](#-mathematical-foundation-mna)
 - [Software Architecture](#-software-architecture)
@@ -22,9 +22,9 @@ This project explores the intersection of numerical analysis, sparse matrix comp
 
 ---
 
-## ✨ Core Features
+## Core Features
 
-### 🧮 Numerical & Simulation Capabilities
+### Numerical & Simulation Capabilities
 - **SPICE Netlist Parser:** Native support for parsing `.cir` and standard SPICE netlist files.
 - **Analysis Types:** - **DC Operating Point Analysis (.OP):** Steady-state resolution of linear and multi-loop networks.
   - **Transient Analysis (.TRAN):** Time-domain simulation using Numerical Integration (backward Euler method) for time-dependent devices (Capacitors and Inductors).
@@ -32,13 +32,13 @@ This project explores the intersection of numerical analysis, sparse matrix comp
 - **Iterative Solvers:** Custom implementations of Conjugate Gradient (CG) and BiCGSTAB, optimized for sparse matrices.
 - **Supported Devices:** Ideal Resistors, Capacitors, Inductors, Independent Voltage Sources, and Independent Current Sources.
 
-### 🚀 High-Performance Computing (HPC)
+### High-Performance Computing (HPC)
 - **Hybrid Architecture:** Distributed memory scaling across nodes via **MPI**, coupled with shared-memory thread parallelism within nodes via **OpenMP**.
 - **Vectorization-Ready:** Inner loops structured to facilitate compiler auto-vectorization.
 
 ---
 
-## 📐 Mathematical Foundation (MNA)
+## Mathematical Foundation (MNA)
 
 e-XSpice relies on Modified Nodal Analysis (MNA) to formulate the circuit equations. The simulator constructs and solves the following sparse linear system:
 
@@ -53,7 +53,7 @@ For Transient Analysis, the companion model approach is used, transforming diffe
 
 ---
 
-## 🏗️ Software Architecture
+## Software Architecture
 
 ```text
 e-XSpice/
@@ -70,7 +70,7 @@ e-XSpice/
 ---
 ```
 
-## 🛠️ Building and Compilation 
+## Building and Compilation 
 
 The project uses a modern **CMake workflow**, ensuring a seamless and unified build process across **Windows, Linux, and macOS**.
 
@@ -97,7 +97,7 @@ cd e-XSpice
 
 ### Compilation Details
 
-💻 Windows (Using MinGW / Git Bash)
+ Windows (Using MinGW / Git Bash)
 
 Ensure your MinGW compiler and MS-MPI paths are properly configured in your system's `PATH`
 
@@ -109,7 +109,7 @@ cmake -S . -B build -G "MinGW Makefiles"
 cmake --build build --config Release -j
 ```
 
-🐧 Linux (Ubuntu / Debian)
+ Linux (Ubuntu / Debian)
 
 Install the required dependencies:
 
@@ -130,7 +130,7 @@ cmake --build build -j $(nproc)
 ```
 ---
 
-## 🧪 Testing
+## Testing
 
 e-XSpice includes a suite of automated unit tests to validate the physical accuracy of the solvers against expected SPICE results. To run the tests using **CTest**:
 
@@ -139,7 +139,7 @@ cd build
 ctest --output-on-failure
 ```
 
-## 💻 Usage Examples
+## Usage Examples
 
 In the `examples/` folder, you will find some benchmark circuits and `.cir` netlists. After compilation, the executable will be located in the `build/` directory (`e-XSpice` on Linux/macOS, `e-XSpice.exe` on Windows).
 
@@ -196,7 +196,7 @@ mpiexec -np 2 ./build/e-xspice 3 10000
 
 ---
 
-## ⚡ Parallelization Strategy
+## Parallelization Strategy
 
 ### MPI (Distributed Memory)
 
@@ -220,7 +220,7 @@ mpiexec -np 2 ./build/e-xspice 3 10000
 achieves ~10–12× speedup vs serial execution
 
 
-## 🗺️ Next Steps (Development Roadmap)
+## Next Steps (Development Roadmap)
  - [ ] Non-linear devices (Diodes + Newton-Raphson)
  - [ ] MOSFET Basic Quadratic model
  - [ ] BJT Basic Exponencial model
@@ -230,12 +230,12 @@ achieves ~10–12× speedup vs serial execution
  - [ ] Graph partitioning (METIS)
 
 
-### 📜 License
+### License
 
 This project is licensed under the GPL-3.0 License.
 See the ```LICENSE``` file for details.
 
-## 📚 References
+## References
 
 ### Core Resources
 - [SPICE (UC Berkeley)](https://people.eecs.berkeley.edu/~newton/spice/)
