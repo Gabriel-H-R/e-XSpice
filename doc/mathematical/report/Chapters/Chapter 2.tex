@@ -1,0 +1,124 @@
+\section{B: Instrumentation Amplifiers}
+\label{sec:chap_2}
+
+\subsection{Part 1: Theory}
+
+\begin{spacing}{1.25}
+
+
+
+\begin{figure}[htbp]
+    \centering
+    \tikzset{external/export next=false}
+    \begin{tikzpicture}[transform shape]
+        % Paths, nodes and wires:
+	\node[tlground] at (6.25, 4.5){};
+	\draw (3.25, 6.5) to[sinusoidal voltage source, l_={$V$}] (3.25, 5.5);
+	\draw (3.75, 7) to[american resistor, l={$R$}] (5.75, 7);
+	\draw (6.25, 6.75) to[capacitor, l={$C$}] (6.25, 5);
+	\draw (6.75, 7) to[american inductor, l={$L$}] (8.75, 7);
+	\draw (9, 6.75) to[empty diode, l={$D$}] (9, 5);
+	\draw (9, 5) -- (6.25, 5);
+	\draw (6.25, 5) -| (6.25, 4.75);
+	\draw (6.75, 7) -- (5.75, 7);
+	\draw (6.25, 7) -| (6.25, 6.75);
+	\draw (8.75, 7) -- (9, 7) -| (9, 6.75);
+	\draw (6.25, 5) -- (3.25, 5) -| (3.25, 5.5);
+	\draw (3.75, 7) -- (3.25, 7) -| (3.25, 6.5);
+	\node[circ](N1) at (6.25, 7){} node[anchor=south] at (N1.north){$\text{Node 2}$};
+	\node[circ](N2) at (6.25, 5){} node[anchor=north west] at ([xshift=-0.09cm, yshift=0.09cm]N2.south east){$\text{Node 0 (GND)}$};
+	\node[circ](N3) at (3.25, 7){} node[anchor=south] at (N3.north){$\text{Node 1}$};
+	\node[circ](N4) at (9, 7){} node[anchor=south] at (N4.north){$\text{Node 3}$};
+	\draw (6.25, 4.75) -| (6.25, 4.5);
+    \end{tikzpicture}
+    \tikzexternalenable
+    \caption{Diagrama esquemático do circuito com fonte AC, resistor, capacitor, indutor e diodo.}
+    \label{fig:meu_circuito}
+\end{figure}
+
+\begin{figure}[htbp]
+    \centering
+    \tikzset{external/export next=false}
+    \begin{tikzpicture}[transform shape]
+        % Paths, nodes and wires:
+        \path[draw={rgb,255:red,255;green,77;blue,77}, line width=0.5pt, dash pattern={on 2pt off 2pt}] (3.25, 5) -- (2, 5);
+        \path[draw={rgb,255:red,255;green,77;blue,77}, line width=0.5pt, dash pattern={on 2pt off 2pt}] (3.25, 7) -- (2, 7);
+        \node[tlground] at (6.25, 4.5){};
+        \draw (3.25, 6.5) to[sinusoidal voltage source, l_={$V$}] (3.25, 5.5);
+        \draw (3.75, 7) to[american resistor, l={$R$}] (5.75, 7);
+        \draw (6.25, 6.75) to[capacitor, l={$C$}] (6.25, 5);
+        \draw (7.614, 7) to[american inductor, l={$L$}] (9.614, 7);
+        \draw (9.864, 6.75) to[empty diode, l={$D$}] (9.864, 5);
+        \draw (9.864, 5) -- (6.25, 5);
+        \draw (6.25, 5) -| (6.25, 4.75);
+        \draw (7.614, 7) |- (5.75, 7);
+        \draw (6.25, 7) -| (6.25, 6.75);
+        \draw (9.614, 7) -- (9.864, 7) -| (9.864, 6.75);
+        \draw (6.25, 5) -- (3.25, 5) -| (3.25, 5.5);
+        \draw (3.75, 7) -- (3.25, 7) -| (3.25, 6.5);
+        \node[circ](N1) at (6.25, 7){} node[anchor=south] at (N1.north){$\text{Node 2}$};
+        \node[circ](N2) at (6.25, 5){} node[anchor=north west] at ([xshift=-0.09cm, yshift=0.09cm]N2.south east){$\text{Node 0 (GND)}$};
+        \node[circ](N3) at (3.25, 7){} node[anchor=south] at (N3.north){$\text{Node 1}$};
+        \node[circ](N4) at (9.864, 7){} node[anchor=south] at (N4.north){$\text{Node 3}$};
+        \draw (6.25, 4.75) -| (6.25, 4.5);
+        
+        \path[draw={rgb,255:red,79;green,77;blue,255}, line width=0.6pt, -latex] (3.75, 5.25) -- (3.75, 6.75);
+        \path[draw={rgb,255:red,79;green,77;blue,255}, line width=0.6pt, -latex] (4, 6.75) -- (5.5, 6.75);
+        \node[shape=rectangle, minimum width=0.351cm, minimum height=0.449cm](N5) at (4.057, 5.992){} node[anchor=center] at (N5.text){\textcolor{rgb,255:red,79;green,77;blue,255}{$I_1$}} node[anchor=north west, align=left, text width=-0.037cm, inner sep=6pt] at (3.864, 6.234){};
+        \node[shape=rectangle, minimum width=0.436cm, minimum height=0.494cm](N6) at (4.765, 6.485){} node[anchor=center] at (N6.text){\textcolor{rgb,255:red,79;green,77;blue,255}{$I_2$}} node[anchor=north west, align=left, text width=0.047cm, inner sep=6pt] at (4.529, 6.75){};
+        \path[draw={rgb,255:red,79;green,77;blue,255}, line width=0.6pt, -latex] (5.75, 5.25) -- (5.75, 6.75);
+        \node[shape=rectangle, minimum width=0.436cm, minimum height=0.494cm](N7) at (5.485, 5.985){} node[anchor=center] at (N7.text){\textcolor{rgb,255:red,79;green,77;blue,255}{$I_3$}} node[anchor=north west, align=left, text width=0.047cm, inner sep=6pt] at (5.25, 6.25){};
+        
+        \path[draw={rgb,255:red,79;green,77;blue,255}, line width=0.6pt, -latex] (9.114, 6.75) -- (7.614, 6.75);
+        \node[shape=rectangle, minimum width=0.436cm, minimum height=0.494cm](N8) at (8.378, 6.485){} node[anchor=center] at (N8.text){\textcolor{rgb,255:red,79;green,77;blue,255}{$I_4$}} node[anchor=north west, align=left, text width=0.047cm, inner sep=6pt] at (8.143, 6.75){};
+        \path[draw={rgb,255:red,79;green,77;blue,255}, line width=0.6pt, -latex] (9.364, 6.75) -- (9.364, 5.25);
+        \node[shape=rectangle, minimum width=0.436cm, minimum height=0.494cm](N9) at (9.099, 5.985){} node[anchor=center] at (N9.text){\textcolor{rgb,255:red,79;green,77;blue,255}{$I_5$}} node[anchor=north west, align=left, text width=0.047cm, inner sep=6pt] at (8.864, 6.25){};
+        
+        \path[draw={rgb,255:red,255;green,77;blue,77}, line width=0.6pt, -latex] (2, 5) -- (2, 7);
+        \node[shape=rectangle, minimum width=0.351cm, minimum height=0.449cm](N10) at (1.693, 6.008){} node[anchor=center] at (N10.text){\textcolor{rgb,255:red,255;green,77;blue,77}{$V_1$}} node[anchor=north west, align=left, text width=-0.037cm, inner sep=6pt] at (1.5, 6.25){};
+        \path[draw={rgb,255:red,255;green,77;blue,77}, line width=0.5pt, dash pattern={on 2pt off 2pt}] (11.114, 5) -- (9.864, 5);
+        \path[draw={rgb,255:red,255;green,77;blue,77}, line width=0.5pt, dash pattern={on 2pt off 2pt}] (11.114, 7) -- (9.864, 7);
+        \path[draw={rgb,255:red,255;green,77;blue,77}, line width=0.6pt, -latex] (11.114, 5) -- (11.114, 7);
+        \node[shape=rectangle, minimum width=0.351cm, minimum height=0.449cm](N11) at (10.807, 6.242){} node[anchor=center] at (N11.text){\textcolor{rgb,255:red,255;green,77;blue,77}{$V_3$}} node[anchor=north west, align=left, text width=-0.037cm, inner sep=6pt] at (10.614, 6.484){};
+        \path[draw={rgb,255:red,255;green,77;blue,77}, line width=0.6pt, -latex] (7.307, 5) -- (7.307, 7);
+        \node[shape=rectangle, minimum width=0.351cm, minimum height=0.449cm](N12) at (7.557, 6.008){} node[anchor=center] at (N12.text){\textcolor{rgb,255:red,255;green,77;blue,77}{$V_2$}} node[anchor=north west, align=left, text width=-0.037cm, inner sep=6pt] at (7.364, 6.25){};
+    \end{tikzpicture}
+    \tikzexternalenable
+    \caption{Diagrama esquemático do circuito com fonte AC, resistor, capacitor, indutor e diodo.}
+    \label{fig:meu_circuito}
+\end{figure}
+
+
+\textbf{KCL at Node 1:}
+
+\begin{gather*}
+    I_1 - I_2 = 0 \\
+    i_{V} - \frac{V_{1} - V_{2}}{R} = 0 \\
+    i_{V} - (V_{1} - V_{2})G = 0
+\end{gather*}
+
+\textbf{KCL at Node 2:}
+\begin{gather*}
+    I_2 + I_3 + I_4 = 0 \\
+    \frac{V_{1} - V_{2}}{R} + i_{C} + i_{L} = 0 \\
+    \frac{V_{1} - V_{2}}{R} + (- C\frac{dV_{2}}{dt}) + i_{L} = 0 \\
+    (V_{1} - V_{2})G + (- C\frac{dV_{2}}{dt}) + i_{L} = 0
+\end{gather*}
+
+\textbf{KCL at Node 3:}
+
+\begin{gather*}
+    -I_4 - I_5 = 0 \\
+    i_{L} - i_{D} = 0 \\
+    i_{D} - I_s \left( e^{\frac{e_3}{V_T}} - 1 \right) = 0
+\end{gather*}
+
+\textbf{KVL}
+
+
+
+
+
+
+
+\end{spacing}

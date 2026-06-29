@@ -1,0 +1,187 @@
+\documentclass[11pt, hidelinks, twoside]{article}
+
+\usepackage{setspace}
+\usepackage[headheight = 13.6pt]{geometry}
+ \geometry{a4paper, total={170mm,257mm}, left=20mm, top=20mm}
+\usepackage{amssymb,amsfonts,bezier,amstext,amsthm,amsmath,graphicx,makeidx,caption,subfigure,mathtools}
+
+% --- Language Setup (English) ---
+\usepackage[english]{babel} 
+\usepackage[colorinlistoftodos]{todonotes}
+\usepackage{bm}
+\usepackage{stackengine}
+\newcommand{\pr}{\hspace*{15mm}}
+\newcommand{\n}{\noindent}
+\newcommand{\questionequal}{\mathrel{\stackon[0.5pt]{=}{?}}}
+\usepackage{lipsum}
+\usepackage{textcomp}
+\usepackage{gensymb}
+\usepackage{mathrsfs}
+\usepackage{tikz}
+% \usepackage{fontspec}
+\usepackage{authblk}
+\usepackage{blindtext}
+\usepackage{booktabs}
+\usepackage[T1]{fontenc}
+\usepackage{graphicx}
+\graphicspath{ {./images/} }
+\usepackage{amsmath}
+\usepackage[bookmarksnumbered=true]{hyperref}
+\usepackage{indentfirst}
+\usepackage{float}
+\usepackage{color}  
+\usepackage{chemfig,chemmacros} 
+\usepackage{pdfpages}
+\usepackage{makeidx}
+\usepackage{lastpage}
+\usepackage{lmodern}
+\usepackage{mathtools}
+\usepackage{bm}
+\usepackage{esvect}
+
+% --- Custom English Labels ---
+\def\figureautorefname{Figure}
+\def\equationautorefname{Equation}
+\def\tableautorefname{Table}
+
+\usepackage{comment}
+\usepackage{url}
+\usepackage{pgfplots}
+\pgfplotsset{compat=newest}
+\pgfplotsset{plot coordinates/math parser=false}
+\newlength\figureheight
+\newlength\figurewidth
+\usepackage[title]{appendix}
+\usepackage{float}
+\usepackage{placeins}
+\usepackage{multirow}
+\usepackage{hyperref}
+\usepackage{tikz,tkz-euclide}
+\usepackage{circuitikz}
+\usepackage[framed,numbered,autolinebreaks,useliterate]{mcode}
+\usepackage{verbatim}
+\usepackage{fancyhdr}
+\usepackage{adjustbox}
+\usepackage{hyperref}
+\usepackage{silence}
+\usepackage{physics}
+\usepackage{cancel}
+\usepackage{xparse}
+\usepackage{esint}
+\usepackage{tikz-3dplot}
+\WarningFilter{latex}{`h' float specifier changed to `ht'}
+
+\usetikzlibrary{external}
+\tikzexternalize
+
+\hypersetup{colorlinks = true,
+            linkcolor = black,
+            urlcolor  = blue}
+
+\renewcommand\lstlistingname{Code}
+\setlength{\parskip}{0.2\baselineskip}
+
+% Centered Contents Title
+\addto\captionsenglish{\renewcommand{\contentsname}{\centering Contents}}
+
+\AtBeginDocument{\RenewCommandCopy\qty\SI}
+\ExplSyntaxOn
+    \msg_redirect_name:nnn { siunitx } { physics-pkg } { none }
+\ExplSyntaxOff
+
+\usetikzlibrary{arrows.meta}
+
+% --- Theorems and Corollaries in English ---
+\renewcommand\qedsymbol{$\blacksquare$}
+\newtheorem{theorem}{Theorem}[]
+\newtheorem{corollary}{Corollary}[theorem]
+
+% --- Sectioning depth ---
+\setcounter{secnumdepth}{5}
+\setcounter{tocdepth}{5}
+
+\makeatletter
+\newcommand\subsubsubsection{\@startsection{paragraph}{4}{\z@}{-2.5ex\@plus -1ex \@minus -.25ex}{1.25ex \@plus .25ex}{\normalfont\normalsize\bfseries}}
+\newcommand\subsubsubsubsection{\@startsection{subparagraph}{5}{\z@}{-2.5ex\@plus -1ex \@minus -.25ex}{1.25ex \@plus .25ex}{\normalfont\normalsize\bfseries}}
+\makeatother
+
+% --- Circled elements in equations ---
+\makeatletter
+\newcommand\mathcircled[1]{%
+  \mathpalette\@mathcircled{#1}%
+}
+\newcommand\@mathcircled[2]{%
+  \tikz[baseline=(math.base)] \node[draw,circle,inner sep=1pt] (math) {$\m@th#1#2$};%
+}
+\makeatother
+
+\makeatletter
+\newcommand\mathdashedcircled[1]{%
+  \mathpalette\@mathdashedcircled{#1}%
+}
+\newcommand\@mathdashedcircled[2]{%
+  \tikz[baseline=(math.base)] \node[draw,circle,dashed,inner sep=1pt] (math) {$\m@th#1#2$};%
+}
+\makeatother
+
+\numberwithin{equation}{section}
+
+\begin{document}
+\thispagestyle{empty}
+
+\begin{figure}[ht]
+    \centering
+    % Ensure this path is correct in your folder
+    \includegraphics[width=8cm]{Images/ecole_centrale_lille_logo.png}
+    \hfill \\[0.25cm]
+\end{figure}
+    
+\begin{center}
+    {\Large $\mathrm{e}^{-}\vec{X}$Spice} \\[0.3cm]
+    \vspace{4.35cm}
+    {\LARGE \textbf{Electronics for Biomedical Engineering}} \\[1cm]
+    {\LARGE \textbf{Mathematical Formulation}} \\[2cm]
+
+    \begin{flushright}
+    \vspace{1.5cm}
+    {\Large Gabriel SILVA}\\ [0.85cm]
+    \end{flushright}
+    {\large \textbf{Villeneuve-d'Ascq\\[0.2cm] 2026}}
+\end{center}
+
+\clearpage
+\thispagestyle{empty}
+
+\clearpage
+\listoffigures
+
+\clearpage
+\thispagestyle{empty}
+
+\clearpage
+\tableofcontents
+
+\clearpage
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[RE,RO]{$\mathrm{e}^{-}\vec{X}$Spice}
+\fancyhead[LE,LO]{Mathematical Formulation}
+\fancyfoot[CE,CO]{\thepage}
+
+\addcontentsline{toc}{section}{Introduction} 
+
+% Make sure to translate the content inside these .tex files!
+%\input{Chapters/Introduction} 
+%\clearpage
+
+\setcounter{page}{6}
+\input{Chapters/Chapter 1}
+
+\clearpage
+\input{Chapters/Chapter 2}
+
+%\clearpage
+%\input{Chapters/Bibliography}
+
+\end{document}
