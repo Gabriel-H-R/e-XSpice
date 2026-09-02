@@ -11,16 +11,32 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -DNDEBUG")
 set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -Wall -Wextra")
 
 # Find MPI (required for distributed parallelization)
-find_package(MPI REQUIRED)
-include_directories(${MPI_CXX_INCLUDE_DIRS})
+#find_package(MPI REQUIRED)
+#include_directories(${MPI_CXX_INCLUDE_DIRS}) // Makes MPI mandatory
+
+#-------- MPI not mandatory (Only for test non parallel things)
+find_package(MPI)
+
+if(MPI_FOUND)
+    message(STATUS "MPI encontrado.")
+endif()
+#---------------------
 
 # Find OpenMP (for shared-memory parallelization)
-find_package(OpenMP REQUIRED)
+#find_package(OpenMP REQUIRED)
+
+find_package(OpenMP)
+
+if(OpenMP_FOUND)
+    message(STATUS "OpenMP encontrado.")
+endif()
+
 
 # Include project directories
 include_directories(
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/libs/symbolic
 )
 
 # Collect all source files
@@ -40,8 +56,12 @@ file(GLOB_RECURSE SOLVER_SOURCES
     "src/solver/*.cpp"
 )
 
-file(GLOB_RECURSE PARALLEL_SOURCES 
+file(GLOB_RECURSE SYMBOLIC_SOURCES 
     "src/parallel/*.cpp"
+)
+
+file(GLOB_RECURSE PARALLEL_SOURCES 
+    "src/symbolic/*.cpp"
 )
 
 # Create static library with all components
