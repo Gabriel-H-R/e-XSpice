@@ -37,8 +37,9 @@ struct RCPBasicEq {
 };
 
 /** 
- * @brief Definição do Dicionário de Termos da SymEngine (umap_basic_num).
- * Mapeia uma Expressão (ex: 'x') para o seu Coeficiente (ex: Inteiro '3' para 3x).
+ * @brief Dicionário fundamental para Otimização de Comutatividade.
+ * Mapeia a Base (Símbolo/Expressão) para o seu Coeficiente Numérico.
+ * Ex: 3x -> Chave: 'x', Valor: Integer(3).
  */
 using umap_basic_num = std::unordered_map<RCP<const Basic>, RCP<const Integer>, RCPBasicHash, RCPBasicEq>;
 
@@ -100,6 +101,6 @@ protected:
  * @brief Cria uma adição algébrica simplificando-a o máximo possível.
  * @param a Primeiro termo.
  * @param b Segundo termo.
- * @return RCP<const Basic> A expressão canônica resultante (pode não ser um Add!).
+ * @return RCP<const Basic> A expressão canônica resultante (que pode ser rebaixada a Integer ou Symbol).
  */
 RCP<const Basic> add(const RCP<const Basic> &a, const RCP<const Basic> &b);

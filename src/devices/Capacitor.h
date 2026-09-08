@@ -48,6 +48,16 @@ public:
                const std::vector<int>& node_map) override;
     
     /**
+     * @brief Stamping AC in MNA matrix
+     */
+    void stampAC(
+        std::vector<std::vector<std::complex<double>>>& Z,
+        std::vector<std::complex<double>>& b,
+        const std::vector<int>& nodeMap,
+        double frequency
+    ) override;
+
+    /**
      * @brief Stamping for transient analysis (companion model)
      * @param G Matrix
      * @param b Vector

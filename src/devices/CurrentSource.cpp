@@ -49,6 +49,16 @@ void CurrentSource::stamp(SparseMatrix& G, std::vector<double>& b,
     // Does not modify matrix G (current source does not affect conductances)
 }
 
+void CurrentSource::stampAC(
+    std::vector<std::vector<std::complex<double>>>& Z,
+    std::vector<std::complex<double>>& b,
+    const std::vector<int>& nodeMap,
+    double frequency
+)
+{
+    // implementação AC
+}
+
 double CurrentSource::getPower() const {
     // Power supplied by the source
     // P = (V_plus - V_minus) × I

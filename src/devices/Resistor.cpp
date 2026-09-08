@@ -74,6 +74,16 @@ void Resistor::stamp(SparseMatrix& G, std::vector<double>& b,
     // Resistor does not contribute to vector b (no independent sources)
 }
 
+void Resistor::stampAC(
+    std::vector<std::vector<std::complex<double>>>& Z,
+    std::vector<std::complex<double>>& b,
+    const std::vector<int>& nodeMap,
+    double frequency
+)
+{
+    // implementação AC
+}
+
 double Resistor::getCurrent() const {
     // Current from n_plus to n_minus
     // I = (V_plus - V_minus) / R = (V_plus - V_minus) * g

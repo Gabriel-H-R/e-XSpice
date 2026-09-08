@@ -66,6 +66,16 @@ void VoltageSource::stamp(SparseMatrix& G, std::vector<double>& b,
     b[k] = voltage_;
 }
 
+void VoltageSource::stampAC(
+    std::vector<std::vector<std::complex<double>>>& Z,
+    std::vector<std::complex<double>>& b,
+    const std::vector<int>& nodeMap,
+    double frequency
+)
+{
+    // implementação AC
+}
+
 double VoltageSource::getPower() const {
     // Power supplied = V × I
     // If I > 0, the source is supplying energy

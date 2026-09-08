@@ -637,12 +637,6 @@ INPUT .\Main.aux
 INPUT .\Main.aux
 INPUT Main.aux
 OUTPUT Main.aux
-INPUT .\Main.out
-INPUT .\Main.out
-INPUT Main.out
-INPUT Main.out
-INPUT .\Main.out
-INPUT .\Main.out
 OUTPUT Main.out
 INPUT C:\Users\gabri\AppData\Local\Programs\MiKTeX\tex\latex\translations\dicts\translations-basic-dictionary-english.trsl
 INPUT C:\Users\gabri\AppData\Local\Programs\MiKTeX\tex\latex\translations\dicts\translations-basic-dictionary-english.trsl
@@ -730,9 +724,13 @@ INPUT C:\Users\gabri\AppData\Local\Programs\MiKTeX\fonts\tfm\public\lm\ec-lmr12.
 INPUT C:\Users\gabri\AppData\Local\Programs\MiKTeX\fonts\tfm\public\lm\ec-lmbx12.tfm
 OUTPUT Main.xdv
 INPUT C:\Users\gabri\AppData\Local\Programs\MiKTeX\fonts\tfm\public\lm\ec-lmbx12.tfm
-INPUT .\Main.lof
-INPUT .\Main.lof
-INPUT Main.lof
+OUTPUT Main.lof
+OUTPUT Main.toc
+INPUT .\Chapters\Chapter 1.tex
+INPUT .\Chapters\Chapter 1.tex
+INPUT .\Chapters\Chapter 1.tex
+INPUT .\Chapters\Chapter 1.tex
+INPUT Chapters\Chapter 1.tex
 INPUT C:\Users\gabri\AppData\Local\Programs\MiKTeX\fonts\tfm\public\lm\rm-lmr10.tfm
 INPUT C:\Users\gabri\AppData\Local\Programs\MiKTeX\fonts\tfm\public\lm\rm-lmr8.tfm
 INPUT C:\Users\gabri\AppData\Local\Programs\MiKTeX\fonts\tfm\public\lm\rm-lmr6.tfm
@@ -769,17 +767,6 @@ INPUT C:\Users\gabri\AppData\Local\Programs\MiKTeX\fonts\tfm\public\esint\esint1
 INPUT C:\Users\gabri\AppData\Local\Programs\MiKTeX\fonts\tfm\public\lm\ts1-lmr10.tfm
 INPUT C:\Users\gabri\AppData\Local\Programs\MiKTeX\fonts\tfm\public\lm\ts1-lmr8.tfm
 INPUT C:\Users\gabri\AppData\Local\Programs\MiKTeX\fonts\tfm\public\lm\ts1-lmr6.tfm
-OUTPUT Main.lof
-INPUT .\Main.toc
-INPUT .\Main.toc
-INPUT Main.toc
-INPUT C:\Users\gabri\AppData\Local\Programs\MiKTeX\fonts\tfm\public\lm\ec-lmbx10.tfm
-OUTPUT Main.toc
-INPUT .\Chapters\Chapter 1.tex
-INPUT .\Chapters\Chapter 1.tex
-INPUT .\Chapters\Chapter 1.tex
-INPUT .\Chapters\Chapter 1.tex
-INPUT Chapters\Chapter 1.tex
 INPUT .\Chapters\Chapter 2.tex
 INPUT .\Chapters\Chapter 2.tex
 INPUT .\Chapters\Chapter 2.tex
@@ -787,6 +774,7 @@ INPUT .\Chapters\Chapter 2.tex
 INPUT Chapters\Chapter 2.tex
 INPUT C:\Users\gabri\AppData\Local\Programs\MiKTeX\fonts\tfm\public\lm\ec-lmr8.tfm
 INPUT C:\Users\gabri\AppData\Local\Programs\MiKTeX\fonts\tfm\public\lm\ec-lmr6.tfm
+INPUT C:\Users\gabri\AppData\Local\Programs\MiKTeX\fonts\tfm\public\lm\ec-lmbx10.tfm
 INPUT Main.aux
 INPUT .\Main.out
 INPUT .\Main.out

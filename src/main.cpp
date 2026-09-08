@@ -4,11 +4,11 @@
  */
 
 #include <iostream>
-#include "e_XSpice_rcp.h"
-#include "Symbol.h"
-#include "Integer.h"
-#include "Add.h"
-#include "StrPrinter.h"
+#include "../libs/symbolic/e_XSpice_rcp.h"
+#include "../libs/symbolic/Symbol.h"
+#include "../libs/symbolic/Integer.h"
+#include "../libs/symbolic/Add.h"
+#include "../libs/symbolic/StrPrinter.h"
 
 // Função helper global para facilitar o print
 std::string str(const RCP<const Basic> &expr) {
@@ -19,12 +19,12 @@ std::string str(const RCP<const Basic> &expr) {
 int main() {
     std::cout << "--- Inicializando o CAS Baseado em SymEngine ---\n\n";
 
-    // 1. Criação instântanea de Símbolos (Alocação com Cache de Hash)
+    // Criação instântanea de Símbolos (Alocação com Cache de Hash)
     auto x = symbol("x");
     auto y = symbol("y");
     auto z = symbol("z");
 
-    // 2. Operações e Testes de Simplificação Canônica
+    // Operações e Testes de Simplificação Canônica
     
     // Exemplo A: x + x 
     // Internamente o factory add() mapeia o hash de x para o valor 2

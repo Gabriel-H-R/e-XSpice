@@ -1,102 +1,189 @@
 cmake_minimum_required(VERSION 3.15)
-project(e-XSpice VERSION 1.0.0 LANGUAGES CXX)
 
-# C++17 is required for modern features
+project(e-XSpice
+    VERSION 1.0.0
+    LANGUAGES CXX
+)
+
+# ============================================================
+# C++ STANDARD
+# ============================================================
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Optimization and debug flags
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -DNDEBUG")
-set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -Wall -Wextra")
 
-# Find MPI (required for distributed parallelization)
-#find_package(MPI REQUIRED)
-#include_directories(${MPI_CXX_INCLUDE_DIRS}) // Makes MPI mandatory
+# ============================================================
+# BUILD TYPE
+# ============================================================
 
-#-------- MPI not mandatory (Only for test non parallel things)
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
+endif()
+
+
+# ============================================================
+# COMPILER FLAGS
+# ============================================================
+
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    add_compile_options(-O3 -march=native -DNDEBUG)
+elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    add_compile_options(-g -O0 -Wall -Wextra)
+endif()
+
+
+# ============================================================
+# MPI
+# ============================================================
+
 find_package(MPI)
 
 if(MPI_FOUND)
-    message(STATUS "MPI encontrado.")
+    message(STATUS "MPI found.")
+    message(STATUS "MPI C++ Compiler: ${MPI_CXX_COMPILER}")
+else()
+    message(STATUS "MPI not found. Continuing without MPI.")
 endif()
-#---------------------
 
-# Find OpenMP (for shared-memory parallelization)
-#find_package(OpenMP REQUIRED)
+
+# ============================================================
+# OPENMP
+# ============================================================
 
 find_package(OpenMP)
 
 if(OpenMP_FOUND)
-    message(STATUS "OpenMP encontrado.")
+    message(STATUS "OpenMP found.")
+    message(STATUS "OpenMP Flags: ${OpenMP_CXX_FLAGS}")
+else()
+    message(STATUS "OpenMP not found. Continuing without OpenMP.")
 endif()
 
 
-# Include project directories
+# ============================================================
+# INCLUDE DIRECTORIES
+# ============================================================
+
 include_directories(
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/libs/symbolic
 )
 
-# Collect all source files
-file(GLOB_RECURSE CORE_SOURCES 
-    "src/core/*.cpp"
+
+# ============================================================
+# SOURCE FILES
+# ============================================================
+
+file(GLOB_RECURSE CORE_SOURCES
+    "${CMAKE_SOURCE_DIR}/src/core/*.cpp"
 )
 
-file(GLOB_RECURSE DEVICE_SOURCES 
-    "src/devices/*.cpp"
+file(GLOB_RECURSE DEVICE_SOURCES
+    "${CMAKE_SOURCE_DIR}/src/devices/*.cpp"
 )
 
-file(GLOB_RECURSE ANALYSIS_SOURCES 
-    "src/analysis/*.cpp"
+file(GLOB_RECURSE ANALYSIS_SOURCES
+    "${CMAKE_SOURCE_DIR}/src/analysis/*.cpp"
 )
 
-file(GLOB_RECURSE SOLVER_SOURCES 
-    "src/solver/*.cpp"
+file(GLOB_RECURSE SOLVER_SOURCES
+    "${CMAKE_SOURCE_DIR}/src/solver/*.cpp"
 )
 
-file(GLOB_RECURSE SYMBOLIC_SOURCES 
-    "src/parallel/*.cpp"
+file(GLOB_RECURSE PARALLEL_SOURCES
+    "${CMAKE_SOURCE_DIR}/src/parallel/*.cpp"
 )
 
-file(GLOB_RECURSE PARALLEL_SOURCES 
-    "src/symbolic/*.cpp"
+file(GLOB_RECURSE SYMBOLIC_SOURCES
+    "${CMAKE_SOURCE_DIR}/libs/symbolic/*.cpp"
 )
 
-# Create static library with all components
+
+# ============================================================
+# STATIC LIBRARY
+# ============================================================
+
 add_library(e-XSpice_lib STATIC
+
     ${CORE_SOURCES}
     ${DEVICE_SOURCES}
     ${ANALYSIS_SOURCES}
     ${SOLVER_SOURCES}
     ${PARALLEL_SOURCES}
+    ${SYMBOLIC_SOURCES}
+
 )
 
-# Link MPI and OpenMP to the library
-target_link_libraries(e-XSpice_lib 
-    PUBLIC 
-    ${MPI_CXX_LIBRARIES}
-    OpenMP::OpenMP_CXX
-)
 
-target_compile_options(e-XSpice_lib 
-    PUBLIC 
-    ${MPI_CXX_COMPILE_FLAGS}
-)
+# ============================================================
+# MPI
+# ============================================================
 
-# Main executable
-add_executable(e-XSpice src/main.cpp)
-target_link_libraries(e-XSpice e-XSpice_lib)
+if(MPI_FOUND)
 
-# Option to compile tests
-option(BUILD_TESTS "Build test programs" ON)
-if(BUILD_TESTS)
-    enable_testing()
-    add_subdirectory(tests)
+    target_link_libraries(e-XSpice_lib
+        PUBLIC
+        MPI::MPI_CXX
+    )
+
 endif()
 
-# Status messages
-message(STATUS "MPI C++ Compiler: ${MPI_CXX_COMPILER}")
-message(STATUS "OpenMP Flags: ${OpenMP_CXX_FLAGS}")
-message(STATUS "Build Type: ${CMAKE_BUILD_TYPE}")
+
+# ============================================================
+# OPENMP
+# ============================================================
+
+if(OpenMP_FOUND)
+
+    target_link_libraries(e-XSpice_lib
+        PUBLIC
+        OpenMP::OpenMP_CXX
+    )
+
+endif()
+
+
+# ============================================================
+# MAIN EXECUTABLE
+# ============================================================
+
+add_executable(e-XSpice
+    src/main.cpp
+)
+
+target_link_libraries(e-XSpice
+    PRIVATE
+    e-XSpice_lib
+)
+
+
+# ============================================================
+# TESTS
+# ============================================================
+
+option(BUILD_TESTS "Build test programs" ON)
+
+if(BUILD_TESTS)
+
+    enable_testing()
+
+    add_subdirectory(tests)
+
+endif()
+
+
+# ============================================================
+# STATUS
+# ============================================================
+
+message(STATUS "")
+message(STATUS "========== e-XSpice Configuration ==========")
+message(STATUS "C++ Standard : C++${CMAKE_CXX_STANDARD}")
+message(STATUS "Build Type   : ${CMAKE_BUILD_TYPE}")
+message(STATUS "MPI          : ${MPI_FOUND}")
+message(STATUS "OpenMP       : ${OpenMP_FOUND}")
+message(STATUS "============================================")
+message(STATUS "")

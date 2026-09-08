@@ -66,6 +66,16 @@ void Inductor::stamp(SparseMatrix& G, std::vector<double>& b,
     b[k] = 0.0;  // V = 0 (DC short circuit)
 }
 
+void Inductor::stampAC(
+    std::vector<std::vector<std::complex<double>>>& Z,
+    std::vector<std::complex<double>>& b,
+    const std::vector<int>& nodeMap,
+    double frequency
+)
+{
+    // implementação AC
+}
+
 void Inductor::stampTransient(SparseMatrix& G, std::vector<double>& b,
                               const std::vector<int>& node_map,
                               double timestep) {

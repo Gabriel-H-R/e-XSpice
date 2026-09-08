@@ -43,6 +43,16 @@ void Capacitor::stamp(SparseMatrix& G, std::vector<double>& b,
     (void)node_map;
 }
 
+void Capacitor::stampAC(
+    std::vector<std::vector<std::complex<double>>>& Z,
+    std::vector<std::complex<double>>& b,
+    const std::vector<int>& nodeMap,
+    double frequency
+)
+{
+    // implementação AC
+}
+
 void Capacitor::stampTransient(SparseMatrix& G, std::vector<double>& b,
                                const std::vector<int>& node_map,
                                double timestep) {
