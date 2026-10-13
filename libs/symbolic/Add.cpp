@@ -5,6 +5,7 @@
 
 #include "Add.h"
 #include "Visitor.h"
+#include "Mul.h"
 #include <map>
 
 // ============================================================================
@@ -161,6 +162,41 @@ RCP<const Basic> add(const RCP<const Basic> &a, const RCP<const Basic> &b) {
                     // emplace() evita inicializações redundantes do operador[]
                     dict.emplace(key, value);
                 }
+            }
+            return;
+        }
+
+        // ========================================================
+        // TERMO MULTIPLICAÇÃO
+        // ========================================================
+        if (type == TypeID::MUL) {
+            auto mul_node = rcp_static_cast<const Mul>(term);
+            const int64_t term_coef = mul_node->get_coef()->get_value();
+            
+            RCP<const Basic> base;
+            const auto &mul_dict = mul_node->get_dict();
+            
+            // Otimização zero-alocação (Estado da Arte): 
+            // Se o nó for apenas algo como '-1 * x' (um item no dicionário com expoente 1),
+            // a base algébrica é apenas o 'x'. Nós extraímos o 'x' sem alocar nada!
+            if (mul_dict.size() == 1 && mul_dict.begin()->second->get_value() == 1) {
+                base = mul_dict.begin()->first;
+            } else {
+                // Caso contrário (ex: -5 * x^2 * y), a base é um novo nó Mul(1, {x:2, y:1})
+                base = make_rcp<const Mul>(integer(1), mul_dict);
+            }
+
+            // Agora somamos o coeficiente isolado ao dicionário usando a base limpa
+            auto it = dict.find(base);
+            if (it != dict.end()) {
+                const int64_t new_val = it->second->get_value() + term_coef;
+                if (new_val == 0) {
+                    dict.erase(it); // x - x = 0!
+                } else {
+                    it->second = integer(new_val);
+                }
+            } else {
+                dict.emplace(base, integer(term_coef));
             }
             return;
         }

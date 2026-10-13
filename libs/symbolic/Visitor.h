@@ -13,7 +13,8 @@
 class Symbol;
 class Integer;
 class Add;
-// class Mul; // Futuro
+class Mul;
+class Pow;
 
 /**
  * @class Visitor
@@ -43,4 +44,16 @@ public:
      * @param x A Adição a ser processada.
      */
     virtual void visit(const Add &x) = 0;
+
+    /**
+     * @brief Visita um nó do tipo Multiplicação.
+     * @param x A Multiplicação a ser processada.
+     */
+    virtual void visit(const Mul &x) = 0;
+
+    /**
+     * @brief Visita um nó do tipo Potência.
+     * @param x A Potência a ser processada.
+     */
+    virtual void visit(const Pow &x) = 0;
 };

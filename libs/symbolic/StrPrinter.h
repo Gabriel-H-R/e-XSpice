@@ -40,4 +40,6 @@ public:
     void visit(const Symbol &x) override;
     void visit(const Integer &x) override;
     void visit(const Add &x) override;
+    void visit(const Mul &x) override;
+    void visit(const Pow &x) override;
 };
