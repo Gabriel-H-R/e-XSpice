@@ -1,16 +1,21 @@
 /**
  * @author Gabriel Henrique Silva
  * @file Resistor.h
- * @brief Linear resistor model
- * 
- * Ohm's law: V = I × R or I = V/R = V × G (where G = 1/R = conductance)
- * 
- * MNA contribution for resistor between nodes i and j:
- * 
- * G[i][i] += g     G[i][j] -= g
- * G[j][i] -= g     G[j][j] += g
- * 
- * where g = 1/R (conductance)
+ * @brief Linear resistor model (DAE formulation).
+ *
+ * Constitutive law:  V = I·R,  I = G·V,  G = 1/R.
+ *
+ * DAE formulation (resistor contributes only to F, never to Q):
+ *
+ *   F rows (KCL):
+ *     F[i] += g·(v_i − v_j)
+ *     F[j] −= g·(v_i − v_j)
+ *
+ *   J_F = dF/dx  (constant stamp):
+ *       [ +g  −g ]
+ *       [ −g  +g ]
+ *
+ * This device carries NO reactive state and NO internal unknowns.
  */
 
 #ifndef RESISTOR_H
@@ -23,69 +28,46 @@ namespace e_XSpice {
 
 class Resistor : public Device {
 public:
-    /**
-     * @brief Constructor
-     * @param name Resistor name (e.g., "R1")
-     * @param node_plus Positive node
-     * @param node_minus Negative node
-     * @param resistance Resistance in Ohms
-     */
-    Resistor(const std::string& name, 
-             Node* node_plus, 
+    Resistor(const std::string& name,
+             Node* node_plus,
              Node* node_minus,
              double resistance);
-    
-    /**
-     * @brief Destructor
-     */
-    ~Resistor() override = default;
-    
-    /**
-     * @brief Stamping in MNA matrix
-     */
-    void stamp(SparseMatrix& G, std::vector<double>& b,
-               const std::vector<int>& node_map) override;
 
-    /**
-     * @brief Stamping AC in MNA matrix
-     */
-    void stampAC(
-        std::vector<std::vector<std::complex<double>>>& Z,
-        std::vector<std::complex<double>>& b,
-        const std::vector<int>& nodeMap,
-        double frequency
-    ) override;
-    
-    /**
-     * @brief Resistor is always linear
-     */
-    bool isLinear() const override { return true; }
-    
-    /**
-     * @brief Calculates current through the resistor
-     * Current flows from node_plus to node_minus
-     */
-    double getCurrent() const override;
-    
-    /**
-     * @brief Calculates dissipated power P = I²R = V²/R
-     */
-    double getPower() const override;
-    
+    ~Resistor() override = default;
+
+    // ---- DAE contract ----
+    int numExtraUnknowns() const override { return 0; }
+
+    void registerJacobianPattern(std::vector<int>& rows,
+                                 std::vector<int>& cols) const override;
+
+    void setJacobianSlots(const std::vector<int>& slots) override { jac_slots_ = slots; }
+
+    void loadF(const DaeSolution& x, double time,
+               std::vector<double>& F) const override;
+
+    void loadJacobianF(DaeMatrix& J, const DaeSolution& x,
+                       double time) const override;
+
+    // ---- Outputs ----
+    bool     isLinear() const override { return true; }
+    double   getCurrent() const override;
+    double   getPower()   const override;
+
     // Getters
     double getResistance() const { return resistance_; }
     double getConductance() const { return conductance_; }
-    Node* getNodePlus() const { return nodes_[0]; }
-    Node* getNodeMinus() const { return nodes_[1]; }
+    Node*  getNodePlus()   const { return nodes_[0]; }
+    Node*  getNodeMinus()  const { return nodes_[1]; }
+
+    /**
+     * @brief Voltage across the resistor (last accepted solution).
+     */
+    double getVoltage() const;
 
 private:
     double resistance_;   // Resistance (Ω)
     double conductance_;  // Conductance (S) = 1/R
-    
-    /**
-     * @brief Validates resistance
-     */
-    void validateResistance(double r);
 };
 
 } // namespace e_XSpice

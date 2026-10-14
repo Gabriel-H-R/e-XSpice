@@ -1,70 +1,58 @@
 /**
- * @author Gabriel Henrique Silva
+ * @author Gabriel Henique Silva
  * @file CurrentSource.cpp
- * @brief Independent current source implementation
+ * @brief Independent current source — pure RHS injection (B vector).
  */
 
 #include "CurrentSource.h"
-#include "../solver/SparseMatrix.h"
+#include "../core/DaeSolution.h"
+#include "../solver/DaeMatrix.h"
 
 namespace e_XSpice {
 
 CurrentSource::CurrentSource(const std::string& name,
                              Node* node_plus,
                              Node* node_minus,
-                             double current)
+                             SourceWaveform waveform)
     : Device(name, DeviceType::CURRENT_SOURCE)
-    , current_(current)
+    , waveform_(std::move(waveform))
 {
     nodes_.push_back(node_plus);
     nodes_.push_back(node_minus);
-    
-    if (node_plus) node_plus->addConnectedDevice(this);
+    if (node_plus)  node_plus->addConnectedDevice(this);
     if (node_minus) node_minus->addConnectedDevice(this);
 }
 
-void CurrentSource::stamp(SparseMatrix& G, std::vector<double>& b,
-                          const std::vector<int>& node_map) {
-    Node* n_plus = nodes_[0];
-    Node* n_minus = nodes_[1];
-    
-    int i = n_plus->isGround() ? -1 : node_map[n_plus->getId()];
-    int j = n_minus->isGround() ? -1 : node_map[n_minus->getId()];
-    
-    // Current source contributes only to vector b
-    // Convention: current flows from n_minus to n_plus
-    // 
-    // Kirchhoff's law:
-    // - Current leaves n_minus: b[j] -= I
-    // - Current enters n_plus: b[i] += I
-    
-    if (i >= 0) {
-        b[i] += current_;  // Current enters the positive node
-    }
-    
-    if (j >= 0) {
-        b[j] -= current_;  // Current leaves the negative node
-    }
-    
-    // Does not modify matrix G (current source does not affect conductances)
+void CurrentSource::registerJacobianPattern(std::vector<int>& rows,
+                                            std::vector<int>& cols) const {
+    (void)rows; (void)cols;   // no matrix entries at all
 }
 
-void CurrentSource::stampAC(
-    std::vector<std::vector<std::complex<double>>>& Z,
-    std::vector<std::complex<double>>& b,
-    const std::vector<int>& nodeMap,
-    double frequency
-)
-{
-    // implementação AC
+void CurrentSource::loadB(double time, std::vector<double>& B) const {
+    last_time_ = time;
+    const int ip = rowOf(nodes_[0]);
+    const int in = rowOf(nodes_[1]);
+    const double i = waveform_.value(time);
+
+    if (ip >= 0) B[ip] -= i;
+    if (in >= 0) B[in] += i;
+}
+
+void CurrentSource::requestBreakpoints(std::vector<double>& times,
+                                       double tstop) const {
+    waveform_.breakpoints(times, tstop);
+}
+
+double CurrentSource::maxTimeStepHint(double t) const {
+    return waveform_.maxTimeStep(t);
 }
 
 double CurrentSource::getPower() const {
-    // Power supplied by the source
-    // P = (V_plus - V_minus) × I
-    double v_plus = nodes_[0]->getVoltage();
-    double v_minus = nodes_[1]->getVoltage();
-    return (v_plus - v_minus) * current_;
+    const double vp = nodes_[0] ? nodes_[0]->getVoltage() : 0.0;
+    const double vn = nodes_[1] ? nodes_[1]->getVoltage() : 0.0;
+    // The current flows from node_plus to node_minus INSIDE the source, so
+    // the power delivered to the circuit is −I·(v+ − v−).
+    return -waveform_.value(last_time_) * (vp - vn);
 }
 
 } // namespace e_XSpice

@@ -28,11 +28,14 @@
 #define NETLIST_PARSER_H
 
 #include "../core/Circuit.h"
+#include "../devices/Diode.h"
 #include <string>
 #include <vector>
 #include <map>
 
 namespace e_XSpice {
+
+class SourceWaveform;  // devices/SourceWaveform.h
 
 /**
  * @brief Analysis type requested in netlist
@@ -127,6 +130,12 @@ private:
     std::map<std::string, int> node_name_to_id_;
     int next_node_id_;
     
+    // Model cards (.MODEL name D (...))
+    std::map<std::string, DiodeModel> diode_models_;
+    
+    // Accumulates a card (with its '+' continuation lines) before parsing
+    std::string continuation_buffer_;
+    
     /**
      * @brief Processes a netlist line
      */
@@ -158,15 +167,49 @@ private:
     bool parseCurrentSource(const std::vector<std::string>& tokens, Circuit& circuit);
     
     /**
-     * @brief Parses commands (.OP, .TRAN, .AC, etc)
+     * @brief Parses diode: D<name> <anode> <cathode> <model> [AREA=<a>]
+     */
+    bool parseDiode(const std::vector<std::string>& tokens, Circuit& circuit);
+    
+    /**
+     * @brief Parses commands (.OP, .TRAN, .AC, .MODEL, .END)
      */
     bool parseCommand(const std::vector<std::string>& tokens);
+    
+    /**
+     * @brief Parses .MODEL <name> D (params...)
+     */
+    bool parseModel(const std::vector<std::string>& tokens);
+    
+    /**
+     * @brief Parses diode model parameters (IS=, N=, RS=, CJO=...)
+     */
+    void parseDiodeParams(const std::vector<std::string>& params, DiodeModel& model);
+    
+    /**
+     * @brief Parses a source waveform: DC/AC <v> | PULSE(...) | SIN(...) | PWL(...)
+     */
+    bool parseSourceSpec(const std::vector<std::string>& tokens,
+                         size_t first_param,
+                         SourceWaveform& waveform,
+                         Circuit& circuit);
+    
+    /**
+     * @brief Collects the numeric tokens of a waveform spec.
+     */
+    std::vector<double> collectNumbers(const std::vector<std::string>& tokens,
+                                       size_t from);
     
     /**
      * @brief Gets or creates node ID from name
      * Names "0", "GND", "gnd" map to 0 (ground)
      */
-    int getNodeId(const std::string& node_name);
+    int getNodeId(const std::string& node_name);                       // name → id
+    
+    /**
+     * @brief Returns the node object for an id, creating it when needed.
+     */
+    Node* getOrCreateNode(Circuit& circuit, const std::string& name, int id);
     
     /**
      * @brief Tokenizes a line (separates by spaces)

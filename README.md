@@ -25,16 +25,30 @@ This project explores the intersection of numerical analysis, sparse matrix comp
 ## Core Features
 
 ### Numerical & Simulation Capabilities
-- **SPICE Netlist Parser:** Native support for parsing `.cir` and standard SPICE netlist files.
-- **Analysis Types:** - **DC Operating Point Analysis (.OP):** Steady-state resolution of linear and multi-loop networks.
-  - **Transient Analysis (.TRAN):** Time-domain simulation using Numerical Integration (backward Euler method) for time-dependent devices (Capacitors and Inductors).
-- **Formulation:** Modified Nodal Analysis (MNA) for robust linear system modeling.
-- **Iterative Solvers:** Custom implementations of Conjugate Gradient (CG) and BiCGSTAB, optimized for sparse matrices.
-- **Supported Devices:** Ideal Resistors, Capacitors, Inductors, Independent Voltage Sources, and Independent Current Sources.
-
-### High-Performance Computing (HPC)
-- **Hybrid Architecture:** Distributed memory scaling across nodes via **MPI**, coupled with shared-memory thread parallelism within nodes via **OpenMP**.
-- **Vectorization-Ready:** Inner loops structured to facilitate compiler auto-vectorization.
+- **SPICE Netlist Parser:** Native support for parsing `.cir` files — R/C/L, independent V/I sources (DC, PULSE, SIN, PWL, AC), diodes with `.MODEL` cards (parameter expressions like `1k`, `100n`, `1u`), `IC=` initial conditions and `+` continuation lines.
+- **DAE formulation (Xyce-style):** the circuit is solved as the nonlinear DAE
+  `C(x)·ẋ + F(x) = b(t)`. Every device contributes:
+  - `F(x)` — static residual (Kirchhoff laws + constitutive laws),
+  - `Q(x)` — charges/fluxes (capacitor `Q = C·V`, inductor `Φ = L·i_L`, junction charge),
+  - `dF/dx` and `dQ/dx` — the two Jacobians; the **time integrator** (not the device)
+    forms the effective system `J = dFdx + s·dQdx` with `s = 2/dt` (trapezoidal) or
+    `1/dt` (backward Euler). No device contains companion-model or integration code.
+- **Analysis types:**
+  - **DC operating point (.OP)** with Newton-Raphson, GMIN homotopy stepping and
+    per-junction GMIN for nonlinear devices;
+  - **Transient (.TRAN)** with trapezoidal/backward-Euler integration,
+    **LTE-controlled adaptive time stepping**, breakpoint clamping, initial-condition
+    operating points (`IC=`), and local step rejection with state rollback.
+- **Robust nonlinear devices:** PN junction diode with the full SPICE3/Xyce level-1 model
+  (Shockley + high-injection knee + reverse third-power law + breakdown + transit-time
+  diffusion charge + C⁰-continuous junction capacitance + PNJLIM limiting + GMIN).
+- **Fixed-sparsity-pattern assembly:** devices declare their Jacobian stamp once and
+  write into pre-resolved CSR slots — no `std::map`/sorting per iteration, with
+  device-parallel assembly (OpenMP) above a size threshold.
+- **Solvers:** Jacobi-preconditioned BiCGSTAB (scalable) + dense-LU direct fallback
+  (robustness), with automatic switch for small/medium systems.
+- **HPC:** hybrid MPI + OpenMP architecture with parallel-size thresholds, so small
+  circuits never pay parallel-region overhead.
 
 ---
 
@@ -58,17 +72,39 @@ For Transient Analysis, the companion model approach is used, transforming diffe
 ```text
 e-XSpice/
 ├── src/
-│   ├── core/           # Circuit topology, Node management, SPICE Parser
-│   ├── devices/        # Physical models (Resistor, Capacitor, Inductor, etc.)
-│   ├── analysis/       # Simulation engines (DCAnalysis, TransientAnalysis)
-│   ├── solver/         # Numerical linear algebra (BiCGSTAB, CG)
+│   ├── core/           # Circuit topology, Node, Device (DAE contract), parser
+│   ├── devices/        # Physical models (R, C, L, V/I sources, diode, waveforms)
+│   ├── analysis/       # DaeSystem (DAE/NR core), DCAnalysis, TransientAnalysis
+│   ├── solver/         # DaeMatrix (fixed pattern), StateStore, LinearSolver
 │   ├── parallel/       # MPI communicator wrappers and OpenMP pragmas
 │   └── main.cpp        # CLI entry point
-├── tests/              # Independent CTest-based unit tests
+├── tests/              # CTest suite, incl. analytical physics verification
 ├── examples/           # Benchmark circuits and .cir netlists
 └── CMakeLists.txt      # Main CMake configuration
 ---
 ```
+
+### The DAE device contract
+
+```
+                 ┌──────────────────────────────┐
+   netlist ─────▶│  Parser → Circuit → Devices  │
+                 └──────────────┬───────────────┘
+                                │  setup(): pattern + indices + states
+                 ┌──────────────▼───────────────┐
+                 │        DaeSystem             │
+                 │  F, Q, B, dFdx, dQdx load    │
+                 │  J = dFdx + s·dQdx           │
+                 │  Newton + gmin homotopy      │
+                 │  LTE step control (transient)│
+                 └──────────────────────────────┘
+```
+
+Every device implements five setup methods (`numExtraUnknowns`,
+`registerJacobianPattern`, `setJacobianSlots`, `registerStates`, `setTopology`) and
+six evaluation methods (`loadF`, `loadQ`, `loadB`, `loadJacobianF`, `loadJacobianQ`,
+`storeState`). Adding a device (MOSFET, BJT, …) means implementing those — no
+analysis code needs to change.
 
 ## Building and Compilation 
 
@@ -221,13 +257,15 @@ achieves ~10–12× speedup vs serial execution
 
 
 ## Next Steps (Development Roadmap)
- - [ ] Non-linear devices (Diodes + Newton-Raphson)
+ - [x] Non-linear devices (Diodes + Newton-Raphson): PNJ + GMIN + PNJLIM + junction charge
+ - [ ] Diode level-2 / sidewall junction (JSW, CJSW, VJSW)
  - [ ] MOSFET Basic Quadratic model
  - [ ] BJT Basic Exponencial model
- - [ ] AC Analysis (frequency domain)
+ - [ ] AC Analysis (frequency domain) in the DAE framework
  - [ ] MOSFET (BSIM) models
  - [ ] Preconditioning (ILU)
  - [ ] Graph partitioning (METIS)
+ - [ ] Distributed (MPI) assembly + solve
 
 
 ### License

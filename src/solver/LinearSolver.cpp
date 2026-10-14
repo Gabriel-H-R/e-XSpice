@@ -21,19 +21,14 @@ LinearSolver::LinearSolver(SolverType type)
 {
 }
 
-SolverResult LinearSolver::solve(const SparseMatrix& A,
+SolverResult LinearSolver::solve(const MatrixOps& A,
                                  const std::vector<double>& b,
                                  std::vector<double>& x,
                                  const std::vector<double>* x0) {
-    if (A.getFormat() != MatrixFormat::CSR) {
-        throw std::runtime_error("Matrix must be in CSR format");
+    if (A.rows() <= 0) {
+        throw std::runtime_error("Solver received an empty matrix");
     }
-    
-    if (A.getRows() != A.getCols()) {
-        throw std::runtime_error("Matrix must be square");
-    }
-    
-    if (static_cast<int>(b.size()) != A.getRows()) {
+    if (static_cast<int>(b.size()) != A.rows()) {
         throw std::runtime_error("Vector size must match matrix dimensions");
     }
     
@@ -43,6 +38,8 @@ SolverResult LinearSolver::solve(const SparseMatrix& A,
             return solveConjugateGradient(A, b, x, x0);
         case SolverType::BICGSTAB:
             return solveBiCGSTAB(A, b, x, x0);
+        case SolverType::DIRECT_LU:
+            return solveDenseLU(A, b, x);
         default:
             throw std::runtime_error("Solver type not implemented");
     }
@@ -50,14 +47,20 @@ SolverResult LinearSolver::solve(const SparseMatrix& A,
 
 double LinearSolver::dotProduct(const std::vector<double>& a,
                                 const std::vector<double>& b) const {
-    int n = a.size();
+    const int n = static_cast<int>(a.size());
+    constexpr int kParallelMin = 512;   // below this, serial is faster
+    if (n >= kParallelMin) {
+        double result = 0.0;
+        #pragma omp parallel for reduction(+:result)
+        for (int i = 0; i < n; ++i) {
+            result += a[i] * b[i];
+        }
+        return result;
+    }
     double result = 0.0;
-    
-    #pragma omp parallel for reduction(+:result)
     for (int i = 0; i < n; ++i) {
         result += a[i] * b[i];
     }
-    
     return result;
 }
 
@@ -66,9 +69,15 @@ double LinearSolver::vectorNorm(const std::vector<double>& v) const {
 }
 
 void LinearSolver::vectorScale(std::vector<double>& v, double alpha) const {
-    int n = v.size();
-    
-    #pragma omp parallel for
+    const int n = static_cast<int>(v.size());
+
+    if (n >= 512) {
+        #pragma omp parallel for
+        for (int i = 0; i < n; ++i) {
+            v[i] *= alpha;
+        }
+        return;
+    }
     for (int i = 0; i < n; ++i) {
         v[i] *= alpha;
     }
@@ -78,23 +87,29 @@ void LinearSolver::vectorAdd(std::vector<double>& result,
                              const std::vector<double>& a,
                              double alpha,
                              const std::vector<double>& b) const {
-    int n = a.size();
-    
-    #pragma omp parallel for
+    const int n = static_cast<int>(a.size());
+
+    if (n >= 512) {
+        #pragma omp parallel for
+        for (int i = 0; i < n; ++i) {
+            result[i] = a[i] + alpha * b[i];
+        }
+        return;
+    }
     for (int i = 0; i < n; ++i) {
         result[i] = a[i] + alpha * b[i];
     }
 }
 
 SolverResult LinearSolver::solveConjugateGradient(
-    const SparseMatrix& A,
+    const MatrixOps& A,
     const std::vector<double>& b,
     std::vector<double>& x,
     const std::vector<double>* x0) {
     
     auto start_time = std::chrono::high_resolution_clock::now();
     
-    int n = A.getRows();
+    int n = A.rows();
     x.resize(n, 0.0);
     
     // Initialization
@@ -180,136 +195,242 @@ SolverResult LinearSolver::solveConjugateGradient(
 }
 
 SolverResult LinearSolver::solveBiCGSTAB(
-    const SparseMatrix& A,
+    const MatrixOps& A,
     const std::vector<double>& b,
     std::vector<double>& x,
     const std::vector<double>* x0) {
     
     auto start_time = std::chrono::high_resolution_clock::now();
+    const int n = A.rows();
     
-    int n = A.getRows();
-    x.resize(n, 0.0);
-    
-    // Initialization
-    if (x0 != nullptr) {
+    // Initial guess
+    x.assign(n, 0.0);
+    if (x0 != nullptr && static_cast<int>(x0->size()) == n) {
         x = *x0;
     }
     
-    // r = b - Ax
-    std::vector<double> r(n);
-    std::vector<double> Ax(n);
-    A.multiplyVector(x, Ax);
-    
+    // Jacobi (diagonal) preconditioner: cheap and very effective for MNA
+    // systems, whose near-singular rows come from diode exponentials.
+    std::vector<double> minv(n, 1.0);
     #pragma omp parallel for
     for (int i = 0; i < n; ++i) {
-        r[i] = b[i] - Ax[i];
+        const double d = A.get(i, i);
+        minv[i] = (std::abs(d) > 1e-300) ? 1.0 / d : 1.0;
     }
     
-    std::vector<double> r0 = r;  // r0 arbitrary (can be initial r)
-    std::vector<double> p = r;
-    std::vector<double> v(n, 0.0);
+    // r = b − A·x
+    std::vector<double> Ax(n);
+    std::vector<double> r(n);
+    A.multiplyVector(x, Ax);
+    #pragma omp parallel for
+    for (int i = 0; i < n; ++i) r[i] = b[i] - Ax[i];
     
-    double rho = 1.0, alpha = 1.0, omega = 1.0;
+    std::vector<double> rhat = r;            // shadow residual
+    std::vector<double> p(n, 0.0), v(n, 0.0);
+    std::vector<double> s(n), t(n), ph(n), sh(n);
+    
+    double rho_prev = 1.0, alpha = 1.0, omega = 1.0;
+    double b_norm = vectorNorm(b);
+    if (b_norm < 1e-300) b_norm = 1.0;
     
     SolverResult result;
     result.converged = false;
     result.iterations = 0;
     
-    double b_norm = vectorNorm(b);
-    if (b_norm < tolerance_) {
-        b_norm = 1.0;
+    auto converged = [&](const std::vector<double>& resid) {
+        const double rn = vectorNorm(resid);
+        result.residual_norm = rn;
+        return rn / b_norm < tolerance_;
+    };
+    
+    if (converged(r)) {                      // already a solution
+        result.converged = true;
+        result.message = "Converged";
+        result.iterations = 0;
+        return result;
     }
     
     for (int iter = 0; iter < max_iterations_; ++iter) {
         result.iterations = iter + 1;
         
-        double rho_new = dotProduct(r0, r);
-        
-        if (std::abs(rho_new) < 1e-30) {
+        // ρ = r̂·r, with a safeguard restart when it vanishes.
+        double rho = dotProduct(rhat, r);
+        int restarts = 0;
+        while (std::abs(rho) < 1e-300 && restarts < 2) {
+            rhat = r;                          // re-orthogonalize / restart
+            rho = dotProduct(rhat, r);
+            ++restarts;
+        }
+        if (std::abs(rho) < 1e-300) {
             result.message = "BiCGSTAB breakdown: rho near zero";
             break;
         }
         
-        if (iter > 0) {
-            double beta = (rho_new / rho) * (alpha / omega);
-            
-            // p = r + beta * (p - omega * v)
-            std::vector<double> temp(n);
-            vectorAdd(temp, p, -omega, v);
-            vectorAdd(p, r, beta, temp);
+        double beta = (iter == 0) ? 0.0
+                                  : (rho / rho_prev) * (alpha / omega);
+        // p = r + β·(p − ω·v)
+        for (int i = 0; i < n; ++i) {
+            p[i] = r[i] + beta * (p[i] - omega * v[i]);
         }
         
-        // v = A * p
-        A.multiplyVector(p, v);
+        // p̂ = M⁻¹·p ; v = A·p̂
+        for (int i = 0; i < n; ++i) ph[i] = minv[i] * p[i];
+        A.multiplyVector(ph, v);
         
-        double r0v = dotProduct(r0, v);
-        if (std::abs(r0v) < 1e-30) {
-            result.message = "BiCGSTAB breakdown: r0'v near zero";
+        const double denom = dotProduct(rhat, v);
+        if (std::abs(denom) < 1e-300) {
+            result.message = "BiCGSTAB breakdown: r^T·A·p near zero";
             break;
         }
+        alpha = rho / denom;
         
-        alpha = rho_new / r0v;
-        
-        // s = r - alpha * v
-        std::vector<double> s(n);
-        vectorAdd(s, r, -alpha, v);
-        
-        // Early convergence test
-        result.residual_norm = vectorNorm(s);
-        if (result.residual_norm / b_norm < tolerance_) {
-            vectorAdd(x, x, alpha, p);
+        // s = r − α·v  (early convergence test on ‖s‖)
+        for (int i = 0; i < n; ++i) s[i] = r[i] - alpha * v[i];
+        if (converged(s)) {
+            for (int i = 0; i < n; ++i) x[i] += alpha * ph[i];
             result.converged = true;
             result.message = "Converged";
             break;
         }
         
-        // t = A * s
-        std::vector<double> t(n);
-        A.multiplyVector(s, t);
-        
-        double tt = dotProduct(t, t);
-        if (tt < 1e-30) {
-            result.message = "BiCGSTAB breakdown: t't near zero";
+        // ŝ = M⁻¹·s ; t = A·ŝ
+        for (int i = 0; i < n; ++i) sh[i] = minv[i] * s[i];
+        A.multiplyVector(sh, t);
+        const double tt = dotProduct(t, t);
+        if (std::abs(tt) < 1e-300) {
+            result.message = "BiCGSTAB breakdown: t^T·t near zero";
             break;
         }
-        
         omega = dotProduct(t, s) / tt;
         
-        // x = x + alpha * p + omega * s
-        vectorAdd(x, x, alpha, p);
-        vectorAdd(x, x, omega, s);
+        // x += α·p̂ + ω·ŝ
+        for (int i = 0; i < n; ++i) x[i] += alpha * ph[i] + omega * sh[i];
         
-        // r = s - omega * t
-        vectorAdd(r, s, -omega, t);
+        // r = s − ω·t
+        for (int i = 0; i < n; ++i) r[i] = s[i] - omega * t[i];
         
-        result.residual_norm = vectorNorm(r);
-        
-        if (result.residual_norm / b_norm < tolerance_) {
+        if (converged(r)) {
             result.converged = true;
             result.message = "Converged";
             break;
         }
-        
-        if (std::abs(omega) < 1e-30) {
+        if (std::abs(omega) < 1e-300) {
             result.message = "BiCGSTAB breakdown: omega near zero";
             break;
         }
+        rho_prev = rho;
         
-        rho = rho_new;
-        
-        if (verbose_ && (iter % 100 == 0)) {
-            std::cout << "  BiCGSTAB Iteration " << iter 
-                     << ", residual = " << result.residual_norm << std::endl;
+        if (verbose_ && iter % 100 == 0) {
+            std::cout << "  BiCGSTAB iteration " << iter
+                      << ", residual = " << result.residual_norm << std::endl;
         }
     }
     
-    if (!result.converged) {
+    if (!result.converged && result.message.empty()) {
         result.message = "Did not converge within max iterations";
     }
     
     auto end_time = std::chrono::high_resolution_clock::now();
-    result.elapsed_time = std::chrono::duration<double>(end_time - start_time).count();
-    
+    result.elapsed_time =
+        std::chrono::duration<double>(end_time - start_time).count();
+    return result;
+}
+
+SolverResult LinearSolver::solveDenseLU(const MatrixOps& A,
+                                        const std::vector<double>& b,
+                                        std::vector<double>& x) const {
+    auto start_time = std::chrono::high_resolution_clock::now();
+
+    const int n = A.rows();
+    x.assign(n, 0.0);
+
+    // Gather into a dense row-major workspace (LU is done in place).
+    std::vector<double> lu(static_cast<size_t>(n) * n, 0.0);
+    #pragma omp parallel for schedule(dynamic, 16)
+    for (int i = 0; i < n; ++i) {
+        double* row = &lu[static_cast<size_t>(i) * n];
+        for (int j = 0; j < n; ++j) {
+            row[j] = A.get(i, j);
+        }
+    }
+
+    SolverResult result;
+    result.converged = false;
+
+    // Doolittle LU with partial pivoting on rows.
+    std::vector<int> perm(n);
+    for (int i = 0; i < n; ++i) perm[i] = i;
+
+    for (int k = 0; k < n; ++k) {
+        int pivot = k;
+        double best = std::abs(lu[static_cast<size_t>(k) * n + k]);
+        for (int i = k + 1; i < n; ++i) {
+            const double v = std::abs(lu[static_cast<size_t>(i) * n + k]);
+            if (v > best) { best = v; pivot = i; }
+        }
+        if (best < 1e-300) {
+            result.message = "LU: matrix is singular";
+            result.iterations = 0;
+            result.elapsed_time =
+                std::chrono::duration<double>(
+                    std::chrono::high_resolution_clock::now() - start_time).count();
+            return result;
+        }
+        if (pivot != k) {
+            #pragma omp parallel for
+            for (int j = 0; j < n; ++j) {
+                std::swap(lu[static_cast<size_t>(k) * n + j],
+                          lu[static_cast<size_t>(pivot) * n + j]);
+            }
+            std::swap(perm[k], perm[pivot]);
+        }
+
+        const double akk = lu[static_cast<size_t>(k) * n + k];
+        #pragma omp parallel for schedule(dynamic, 8)
+        for (int i = k + 1; i < n; ++i) {
+            const double factor = lu[static_cast<size_t>(i) * n + k] / akk;
+            lu[static_cast<size_t>(i) * n + k] = factor;
+            if (factor == 0.0) continue;
+            double* row_i = &lu[static_cast<size_t>(i) * n];
+            const double* row_k = &lu[static_cast<size_t>(k) * n];
+            for (int j = k + 1; j < n; ++j) {
+                row_i[j] -= factor * row_k[j];
+            }
+        }
+    }
+
+    // Forward substitution (L·y = P·b), then back substitution (U·x = y).
+    std::vector<double> y(n);
+    for (int i = 0; i < n; ++i) {
+        double sum = b[perm[i]];
+        const double* row = &lu[static_cast<size_t>(i) * n];
+        for (int j = 0; j < i; ++j) sum -= row[j] * y[j];
+        y[i] = sum;
+    }
+    for (int i = n - 1; i >= 0; --i) {
+        double sum = y[i];
+        const double* row = &lu[static_cast<size_t>(i) * n];
+        for (int j = i + 1; j < n; ++j) sum -= row[j] * x[j];
+        x[i] = sum / row[i];
+    }
+
+    // Residual check.
+    std::vector<double> Ax;
+    A.multiplyVector(x, Ax);
+    double resid = 0.0, bnorm = 0.0;
+    for (int i = 0; i < n; ++i) {
+        resid += (b[i] - Ax[i]) * (b[i] - Ax[i]);
+        bnorm += b[i] * b[i];
+    }
+    resid = std::sqrt(resid);
+    bnorm = std::sqrt(bnorm);
+    result.residual_norm = resid;
+    result.iterations = 1;
+    result.converged = (resid < 1e-8 * std::max(1.0, bnorm));
+    result.message = result.converged ? "Converged" : "LU residual too large";
+    result.elapsed_time =
+        std::chrono::duration<double>(
+            std::chrono::high_resolution_clock::now() - start_time).count();
     return result;
 }
 

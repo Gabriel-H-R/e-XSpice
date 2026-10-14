@@ -1,45 +1,43 @@
 /**
+ * @author Gabriel Henrique Silva
  * @file Diode.h
- * @brief Modelo de diodo com equação de Shockley e PNJLIM
+ * @brief PN-junction diode — charge-based, robust formulation (Xyce level 1).
  *
- * Inspirado no modelo D do Xyce/SPICE.
+ * ================================================================
+ * CURRENT MODEL (three regions, Xyce N_DEV_Diode.C)
+ * ================================================================
+ * Let  Vt = kT/q,  Vte = N·Vt,  VteR = NR·Vt,  VteBRK = NBV·Vt.
  *
- * === MODELO FÍSICO ===
- * Equação de Shockley (diodo ideal):
+ *  (a) forward:  Vd ≥ −3·Vte
+ *        I_norm = IS·(exp(Vd/Vte) − 1) + GMIN·Vd
+ *        I_rec  = ISR·(exp(Vd/VteR) − 1)
+ *        K_hi   = sqrt(IKF/(IKF + I_norm))          (high-injection knee)
+ *        I_D    = K_hi·I_norm + K_hi... (see .cpp for I_rec·K_gen)
+ *  (b) reverse:   I_D = −IS·(1 + (3·Vte/(e·Vd))³) + GMIN·Vd
+ *  (c) breakdown: I_D = −IS·exp(−(BV + Vd)/VteBRK) + GMIN·Vd
+ * G_d = dI_D/dVd in every region; the series resistance RS is carried by
+ * an internal node (Pri) with conductance Gspr = 1/RS.
  *
- *   I_D = I_S * (exp(V_D / (n * V_T)) - 1)
+ * ================================================================
+ * JUNCTION CHARGE (function of V, not an ODE state)
+ * ================================================================
+ * With C0 = CJO·AREA, u = 1 − Vd/VJ, sarg = u^(−M), tDep = FC·VJ:
+ *   Vd < tDep:  Q = TT·I_D + VJ·C0·(1 − u·sarg)/(1 − M)
+ *               C = TT·G_d + C0·sarg
+ *   Vd ≥ tDep:  Q = TT·I_D + C0·tF1 + (C0/F2)·[F3·(Vd − tDep)
+ *                           + ½·(M/VJ)·(Vd² − tDep²)]
+ *               C = TT·G_d + (C0/F2)·[F3 + (M/VJ)·Vd]
+ * with F2 = (1−FC)^(1+M), F3 = 1−FC·(1+M) — chosen so that Q and C are
+ * BOTH continuous at Vd = FC·VJ (the SPICE3f5/Xyce construction; C⁰ in
+ * charge and in capacitance).
  *
- * Onde:
- *   I_S  = corrente de saturação reversa  (típico: 1e-14 A)
- *   n    = fator de idealidade            (1 ≤ n ≤ 2)
- *   V_T  = tensão térmica = kT/q          (≈26mV a 300K)
- *   V_D  = tensão anode-catodo
+ * Because Q is an explicit function of V, dQ/dx = C·dV/dx is loaded into
+ * dQdx and the integrator supplies the transient companion terms — the
+ * device itself contains NO integration code.
  *
- * === LINEARIZAÇÃO PARA NEWTON-RAPHSON ===
- * A cada iteração k, calcula o equivalente Norton:
- *
- *   G_eq = dI_D/dV|_{V_k} = (I_S / (n*V_T)) * exp(V_k/(n*V_T))
- *                         = (I_D + I_S) / (n*V_T)   [mais estável]
- *   I_eq = I_D(V_k) - G_eq * V_k   [fonte de corrente equivalente]
- *
- * Stamp: adiciona G_eq como condutância e I_eq como fonte de corrente.
- * Isso é idêntico ao que Xyce faz internamente.
- *
- * === PNJLIM — VOLTAGE LIMITING ===
- * Sem limitação, exp(V/nVt) causa overflow numérico em poucas iterações.
- * O PNJLIM (PN Junction LIMiter) restringe a variação de tensão por passo:
- *
- *   Se V_new > V_old + n*V_T:
- *     V_lim = V_old + n*V_T * ln((V_new - V_old)/(n*V_T) + 1)
- *   Se V_new < -5*n*V_T:
- *     V_lim = -5*n*V_T
- *
- * === ANÁLISE AC (SMALL-SIGNAL) ===
- * No ponto DC V_Q:
- *   G_d = dI_D/dV|_{V_Q} = (I_D + I_S) / (n*V_T)
- *
- * O diodo vira uma condutância G_d em paralelo com a junção (real pura).
- * A capacitância de junção C_j é a contribuição imaginária em AC.
+ * CONVERGENCE: SPICE3f5 PNJLIM on Vd (and on the mapped breakdown
+ * variable), plus GMIN in parallel with every junction and an exponent
+ * clamp at 100.
  */
 
 #ifndef DIODE_H
@@ -47,120 +45,166 @@
 
 #include "../core/Device.h"
 #include "../core/Node.h"
-#include <string>
-#include <vector>
-#include <complex>
+#include "../solver/StateStore.h"
 #include <cmath>
 
 namespace e_XSpice {
 
+/**
+ * @brief Diode model parameters (defaults per SPICE/Xyce level 1).
+ */
+struct DiodeModel {
+    double IS  = 1e-14;   // Saturation current (A)
+    double N   = 1.0;     // Emission coefficient
+    double RS  = 0.0;     // Series resistance (Ω)
+    double CJO = 0.0;     // Zero-bias junction capacitance (F)
+    double VJ  = 1.0;     // Junction potential (V)
+    double M   = 0.5;     // Grading coefficient
+    double FC  = 0.5;     // Forward-bias depletion coefficient
+    double BV  = 1e99;    // Reverse breakdown voltage (V); BVGiven=false → off
+    double IBV = 1e-3;    // Current at breakdown (A)
+    double NBV = 1.0;     // Breakdown emission coefficient
+    double TT  = 0.0;     // Transit time (s)
+    double EG  = 1.11;    // Bandgap (eV)
+    double XTI = 3.0;     // IS temperature exponent
+    double AREA = 1.0;    // Area multiplier
+    double IKF = 0.0;     // High-injection knee current (A)
+    double ISR = 0.0;     // Recombination saturation current (A)
+    double NR  = 2.0;     // Recombination emission coefficient
+    double TNOM = 300.15; // Reference temperature (K)
+    double TEMP = 300.15; // Device temperature (K)
+    double GMIN = 1e-12;  // Parallel conductance (S) per junction
 
-struct DiodeModelParams {
-    double IS  = 1e-14;   // Corrente de saturação (A)
-    double N   = 1.0;     // Fator de idealidade
-    double RS  = 0.0;     // Resistência série (Ω)
-    double CJO = 0.0;     // Capacitância de junção zero-bias (F)
-    double VJ  = 0.7;     // Potencial de junção (V)
-    double M   = 0.5;     // Gradiente de junção
-    double T   = 300.15;  // Temperatura (K)
+    bool BVGiven = false;
 };
 
 class Diode : public Device {
 public:
-    using ModelParams = DiodeModelParams;
-    
-    /**
-     * @brief Construtor
-     * @param name    Nome do diodo (ex: "D1")
-     * @param anode   Nó anodo (positivo)
-     * @param cathode Nó catodo (negativo)
-     * @param params  Parâmetros do modelo (opcional, usa padrões SPICE)
-     */
-    Diode(const std::string& name,
-          Node* anode,
-          Node* cathode,
-          const ModelParams& params = ModelParams());
+    using ModelParams = DiodeModel;
+
+    explicit Diode(const std::string& name,
+                   Node* anode,
+                   Node* cathode,
+                   const ModelParams& params = ModelParams());
 
     ~Diode() override = default;
 
-    /**
-     * @brief Stamping Newton-Raphson: equivalente Norton linearizado
-     *
-     * Lê V_D atual dos nós, aplica PNJLIM, calcula G_eq e I_eq.
-     * Chamado em cada iteração NR — por isso o stamp é não-linear.
-     */
-    void stamp(SparseMatrix& G, std::vector<double>& b,
-               const std::vector<int>& node_map) override;
+    // ---------------------------------------------------------------
+    // Setup
+    // ---------------------------------------------------------------
+    int numExtraUnknowns() const override { return (params_.RS > 0.0) ? 1 : 0; }
+    int numStateVariables() const override { return 1; }
+    int registerStates(StateStore& store) override;
 
-    /**
-     * @brief Stamping AC: small-signal conductance G_d no ponto DC
-     * Opcionalmente inclui capacitância de junção C_j.
-     */
-    void stampAC(std::vector<std::vector<std::complex<double>>>& Z,
-                 std::vector<std::complex<double>>& b_ac,
-                 const std::vector<int>& node_map,
-                 double omega) override;
+    void registerJacobianPattern(std::vector<int>& rows,
+                                 std::vector<int>& cols) const override;
 
-    bool isLinear() const override { return false; }
+    void beginSolve(bool initial_solve) override;
 
-    /**
-     * @brief Corrente DC através do diodo (Shockley)
-     */
+    // ---------------------------------------------------------------
+    // Evaluation
+    // ---------------------------------------------------------------
+    void loadF(const DaeSolution& x, double time,
+               std::vector<double>& F) const override;
+
+    void loadQ(const DaeSolution& x, double time,
+               std::vector<double>& Q) const override;
+
+    void loadJacobianF(DaeMatrix& J, const DaeSolution& x,
+                       double time) const override;
+
+    void loadJacobianQ(DaeMatrix& J, const DaeSolution& x,
+                       double time) const override;
+
+    void storeState(const DaeSolution& x, StateStore& store) const override;
+
+    void loadChargeHistory(const StateStore& store, double q_coeff,
+                           double qdot_coeff,
+                           std::vector<double>& rhs) const override;
+
+    bool acceptSolution() const override;
+
+    void confirmAccept() override;
+
+    // ---------------------------------------------------------------
+    // Outputs
+    // ---------------------------------------------------------------
+    bool   isLinear() const override { return false; }
     double getCurrent() const override;
-
-    /**
-     * @brief Potência instantânea
-     */
-    double getPower() const override;
-
-    /**
-     * @brief Tensão ânodo-cátodo
-     */
-    double getVoltage() const;
-
-    /**
-     * @brief Condutância de small-signal no ponto operação atual
-     */
-    double getSmallSignalConductance() const;
-
-    /**
-     * @brief Capacitância de junção (para AC)
-     */
-    double getJunctionCapacitance() const;
+    double getPower()   const override;
+    double getVoltage() const { return junctionVoltage(); }
 
     const ModelParams& getParams() const { return params_; }
 
 private:
     ModelParams params_;
-    double vd_prev_;     // Tensão V_D da iteração anterior (para PNJLIM)
-    bool   first_iter_;  // Flag para primeira iteração
+
+    // temperature-scaled internals
+    double vt_       = 0.0;   // kT/q
+    double vte_      = 0.0;   // N·vt
+    double vteR_     = 0.0;   // NR·vt
+    double vteBRK_   = 0.0;   // NBV·vt
+    double isat_     = 0.0;   // IS(T)
+    double isatR_    = 0.0;   // ISR(T)
+    double tJctPot_  = 0.0;   // VJ(T)
+    double tJctCap_  = 0.0;   // CJO(T)
+    double tDepCap_  = 0.0;   // FC·VJ(T)
+    double F2_       = 0.0;   // (1−FC)^(1+M)
+    double F3_       = 0.0;   // 1−FC·(1+M)
+    double tF1_      = 0.0;   // depletion charge at the transition point
+    double tBrkdwnV_ = 0.0;   // breakdown voltage fitted from BV/IBV
+    double tVcrit_   = 0.0;   // critical voltage for PNJLIM
+    double gspr_     = 0.0;   // 1/RS
+    double ikf_      = 0.0;   // IKF(T)
+
+    // junction operating state (last limited evaluation)
+    mutable double vd_limited_ = 0.0;
+    mutable double qd_limited_ = 0.0;
+    mutable double cd_limited_ = 0.0;
+    mutable double id_limited_ = 0.0;
+    mutable double gd_limited_ = 0.0;
+    mutable bool   limiting_active_ = false;
+
+    mutable double vd_prev_ = 0.0;  // last limited junction voltage (PNJLIM history)
+    mutable bool   first_solve_ = true;
+
+public:
+    // Debug switch (diagnostics for convergence studies)
+    static void setDebug(bool on) { debug_ = on; }
+
+private:
+    static bool debug_;
+
+    int priRow() const { return (params_.RS > 0.0) ? branch_index_ : rowOf(nodes_[0]); }
+
+    void updateTemperature();
+    void fitBreakdownVoltage();
 
     /**
-     * @brief Tensão térmica V_T = kT/q
+     * @brief Evaluates current/conductance and junction charge/capacitance
+     *        at the (limited) voltage Vd; fills the cached members.
      */
-    double thermalVoltage() const;
+    void evaluateJunction(double vd) const;
 
     /**
-     * @brief Corrente Shockley para tensão V
+     * @brief SPICE3f5 pnjlim — see N_DEV_DeviceSupport.C in Xyce.
      */
-    double shockleyCurrent(double V) const;
+    static double pnjlim(double vnew, double vold, double vt, double vcrit);
 
     /**
-     * @brief Condutância (derivada da corrente) para tensão V
+     * @brief Reads the raw junction voltage from the solution and applies
+     *        the limiters (returns the limited voltage).
      */
-    double shockleyConductance(double V) const;
+    double limitedJunctionVoltage(const DaeSolution& x) const;
 
     /**
-     * @brief PNJLIM — limita variação de V para evitar overflow exp()
-     * Algoritmo direto do SPICE3 (pnjlim.c)
-     *
-     * @param v_new  Nova tensão (solução atual)
-     * @param v_old  Tensão anterior (iteração k-1)
-     * @param vt     Tensão térmica n*V_T
-     * @param vcrit  Tensão crítica (threshold para limitar)
-     * @return Tensão limitada
+     * @brief Conduction current at voltage vd (no cache mutation).
      */
-    double pnjlim(double v_new, double v_old, double vt, double vcrit) const;
+    double currentForVoltage(double vd) const;
+
+    double junctionVoltageFromNodes() const;
+    double junctionVoltage() const { return junctionVoltageFromNodes(); }
+    double expClamp(double arg) const { return std::exp(std::min(100.0, arg)); }
 };
 
 } // namespace e_XSpice

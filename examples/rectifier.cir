@@ -1,0 +1,21 @@
+* Half-Wave Rectifier (diode + smoothing capacitor)
+*
+*   V1: 1 kHz, 5 V sine (peak)
+*   D1: 1N4148-like junction (IS=1e-12, CJO=100p)
+*   C1: 10 uF smoothing capacitor
+*   RL: 1 k load
+*
+* Expected: the output follows the positive half-cycles with a ~0.7 V drop
+* and a small ripple; it never goes negative (the diode blocks).
+*
+* Run:  ./e-XSpice file examples/rectifier.cir
+
+.MODEL D1N4148 D (IS=1e-12 N=1.0 RS=0.5 CJO=100p VJ=0.7 M=0.5)
+
+V1 1 0 SIN(0 5 1k)
+D1 1 2 D1N4148
+C1 2 0 10u IC=0
+RL 2 0 1k
+
+.TRAN 1u 5m 0
+.END

@@ -17,6 +17,7 @@
 #include <map>
 #include <utility>
 #include <omp.h>
+#include "MatrixOps.h"
 
 namespace e_XSpice {
 
@@ -29,9 +30,12 @@ enum class MatrixFormat {
 };
 
 /**
- * @brief Optimized sparse matrix class
+ * @brief Legacy sparse matrix (map-based construction, CSR for multiply).
+ *
+ * Kept for backwards compatibility; new analysis code should use
+ * DaeMatrix (fixed-pattern, much faster assembly).
  */
-class SparseMatrix {
+class SparseMatrix : public MatrixOps {
 public:
     /**
      * @brief Constructor
@@ -67,7 +71,7 @@ public:
     /**
      * @brief Gets matrix value
      */
-    double get(int row, int col) const;
+    double get(int row, int col) const override;
     
     /**
      * @brief Clears entire matrix
@@ -87,7 +91,11 @@ public:
      * @param result Output vector (must have size rows_)
      */
     void multiplyVector(const std::vector<double>& x, 
-                       std::vector<double>& result) const;
+                       std::vector<double>& result) const override;
+
+    // MatrixOps interface
+    int rows() const override { return getRows(); }
+    bool isSymmetric() const override { return false; }
     
     /**
      * @brief Prints matrix (for debug)

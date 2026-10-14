@@ -31,8 +31,11 @@
 #include <vector>
 #include <string>
 #include <functional>
+#include <memory>
 
 namespace e_XSpice {
+
+class DaeSystem;   // defined in DaeSystem.h
 
 /**
  * @brief Transient simulation data point
@@ -52,7 +55,6 @@ struct TransientResult {
     double total_time;                    // Total simulation time (s)
     std::vector<TransientDataPoint> data; // Temporal history
 };
-
 /**
  * @brief Temporal integration method
  */
@@ -71,8 +73,7 @@ public:
      * @param circuit Reference to the circuit
      */
     TransientAnalysis(Circuit& circuit);
-    
-    ~TransientAnalysis() = default;
+    ~TransientAnalysis();   // out-of-line (DaeSystem is incomplete here)
     
     /**
      * @brief Runs transient analysis
@@ -116,47 +117,41 @@ private:
     int save_interval_;
     
     std::function<void(double, int, int)> progress_callback_;
-    
+
+    std::unique_ptr<DaeSystem> system_;   // DAE/NL engine (owns the system)
+
     /**
-     * @brief Executes one time step
-     * @param t Current time
-     * @param dt Time step
-     * @param node_map Node mapping
-     * @param use_mpi Use MPI
-     * @return true if success
-     */
-    bool timeStep(double t, double dt, const std::vector<int>& node_map, bool use_mpi);
-    
-    /**
-     * @brief Assembles MNA system for transient analysis
-     * Uses companion models for capacitors and inductors
-     */
-    void assembleTransientMNA(SparseMatrix& G,
-                             std::vector<double>& b,
-                             const std::vector<int>& node_map,
-                             double timestep,
-                             bool use_mpi);
-    
-    /**
-     * @brief Creates node mapping and assigns indices
+     * @brief Node mapping of the DAE system (node id -> matrix row).
      */
     void createNodeMap(std::vector<int>& node_map);
-    
+
     /**
-     * @brief Extracts solution and updates nodes
+     * @brief Collects a data point (node voltages + branch currents) at a
+     *        given time.
      */
-    void extractSolution(const std::vector<double>& x,
-                         const std::vector<int>& node_map);
-    
+    TransientDataPoint collectDataPoint(double time,
+                                       const std::vector<int>& node_map);
+
     /**
-     * @brief Updates states of all reactive devices
+     * @brief Integration coefficient s applied by the effective Jacobian:
+     *        2/dt (trapezoidal) or 1/dt (backward Euler).
      */
-    void updateDeviceStates();
-    
+    double integrationCoeff(double dt) const {
+        return (method_ == IntegrationMethod::TRAPEZOIDAL) ? (2.0 / dt) : (1.0 / dt);
+    }
+
     /**
-     * @brief Collects data from current step
+     * @brief Trapezoidal local truncation error estimate, normalized:
+     *   ratio = max_i |LTE_i| / (reltol·|x_i| + vtol_or_atol)
+     * A ratio ≤ 1 accepts the step. Uses the last three accepted solutions.
      */
-    TransientDataPoint collectDataPoint(double time, const std::vector<int>& node_map);
+    double estimateLteRatio(double dt,
+                            const std::vector<double>& x_new,
+                            const std::vector<double>& x_old,
+                            const std::vector<double>& x_older,
+                            double reltol, double vntol, double abstol) const;
+
+    bool lte_ready_ = false;   // true once three solutions are available
 };
 
 } // namespace e_XSpice

@@ -1,20 +1,15 @@
 /**
  * @author Gabriel Henrique Silva
  * @file CurrentSource.h
- * @brief Independent current source
- * 
- * A current source injects a fixed current into the circuit.
- * Convention: current flows from the negative node to the positive.
- * 
- * MNA contribution for current source I between nodes i and j:
- * - Does not add extra rows/columns (unlike voltage source)
- * - Only modifies vector b:
- * 
- * b[i] -= I  (current leaves node i)
- * b[j] += I  (current enters node j)
- * 
- * Example: I = 1A from node 0 (GND) to node 1
- * → b[1] += 1.0 (1A enters node 1)
+ * @brief Independent current source — pure RHS injection (B vector).
+ *
+ * An independent current source adds NO unknowns and NO matrix entries:
+ * the entire contribution is the injection  I(t)  in the residual RHS
+ * (Xyce: B[pos] −= I ; B[neg] += I).
+ *
+ * Convention: positive current flows from node_plus to node_minus
+ * THROUGH the source, i.e. it is injected into node_minus and pulled
+ * out of node_plus (SPICE convention).
  */
 
 #ifndef CURRENT_SOURCE_H
@@ -22,61 +17,51 @@
 
 #include "../core/Device.h"
 #include "../core/Node.h"
+#include "SourceWaveform.h"
 
 namespace e_XSpice {
 
 class CurrentSource : public Device {
 public:
-    /**
-     * @brief Constructor
-     * @param name Source name (e.g., "I1", "Ibias")
-     * @param node_plus Node where current flows into (input)
-     * @param node_minus Node where current flows out (output)
-     * @param current Source current (A)
-     */
     CurrentSource(const std::string& name,
                   Node* node_plus,
                   Node* node_minus,
-                  double current);
-    
-    ~CurrentSource() override = default;
-    
-    /**
-     * @brief Stamping in MNA matrix
-     * Current source only modifies vector b
-     */
-    void stamp(SparseMatrix& G, std::vector<double>& b,
-               const std::vector<int>& node_map) override;
+                  SourceWaveform waveform);
 
-    /**
-     * @brief Stamping AC in MNA matrix
-     */
-    void stampAC(
-        std::vector<std::vector<std::complex<double>>>& Z,
-        std::vector<std::complex<double>>& b,
-        const std::vector<int>& nodeMap,
-        double frequency
-    ) override;
-    
-    bool isLinear() const override { return true; }
-    
-    /**
-     * @brief Returns source current (known)
-     */
-    double getCurrent() const override { return current_; }
-    
-    /**
-     * @brief Power supplied P = V × I
-     * where V = V_plus - V_minus
-     */
-    double getPower() const override;
-    
-    // Getters/Setters
-    double getCurrentValue() const { return current_; }
-    void setCurrent(double i) { current_ = i; }
+    ~CurrentSource() override = default;
+
+    // ---------------------------------------------------------------
+    // Setup
+    // ---------------------------------------------------------------
+    int numExtraUnknowns() const override { return 0; }
+
+    void registerJacobianPattern(std::vector<int>& rows,
+                                 std::vector<int>& cols) const override;
+
+    void requestBreakpoints(std::vector<double>& times, double tstop) const override;
+
+    double maxTimeStepHint(double t) const override;
+
+    // ---------------------------------------------------------------
+    // Evaluation
+    // ---------------------------------------------------------------
+    void loadB(double time, std::vector<double>& B) const override;
+
+    // ---------------------------------------------------------------
+    // Outputs
+    // ---------------------------------------------------------------
+    bool   isLinear() const override { return true; }
+    double getCurrent() const override { return waveform_.value(last_time_); }
+    double getPower()   const override;   // V·I delivered by the source
+
+    // Getters / setters
+    double getValue(double t = 0.0) const { return waveform_.value(t); }
+    const SourceWaveform& waveform() const { return waveform_; }
+    void setWaveform(const SourceWaveform& w) { waveform_ = w; }
 
 private:
-    double current_;  // Source current (A)
+    SourceWaveform waveform_;
+    mutable double last_time_ = 0.0;
 };
 
 } // namespace e_XSpice

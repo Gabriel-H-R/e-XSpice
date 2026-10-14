@@ -1,306 +1,291 @@
 /**
  * @author Gabriel Henrique Silva
  * @file TransientAnalysis.cpp
- * @brief Implementation of transient analysis
+ * @brief Transient analysis on top of the DAE device layer.
+ *
+ * Algorithm (Xyce-style):
+ *   1. setup(): fixed sparsity pattern, state history, MNA indices;
+ *   2. operating point at t = tstart:
+ *        - devices with IC= present  → IC operating point (capacitors become
+ *          voltage sources, inductors current sources), then the charge
+ *          history is frozen from that point;
+ *        - otherwise a plain DC OP (with sources at their tstart value);
+ *   3. time loop:
+ *        for each step dt:
+ *          solve the nonlinear DAE at t+dt with
+ *              J  = dFdx + s·dQdx,   s = 2/dt (trap) or 1/dt (BE)
+ *              RHS = B − F − s·Q + s·Q_n (+ dQ/dt_n for trap)
+ *          on failure: halve dt (local step rejection) and retry;
+ *          on success: accept states, compute dQ/dt, extract, record;
+ *   4. breakpoints (source discontinuities) clamp dt so steps never jump
+ *      over a waveform edge — no interpolation artifacts.
  */
 
 #include "TransientAnalysis.h"
-#include "../devices/VoltageSource.h"
+#include "DaeSystem.h"
 #include "../devices/Capacitor.h"
 #include "../devices/Inductor.h"
+#include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <chrono>
-#include <cmath>
 
 namespace e_XSpice {
 
-TransientAnalysis::TransientAnalysis(Circuit& circuit)
-    : circuit_(circuit)
+TransientAnalysis::TransientAnalysis(Circuit& circuit)    : circuit_(circuit)
     , method_(IntegrationMethod::TRAPEZOIDAL)
     , solver_type_(SolverType::BICGSTAB)
-    , max_iterations_(10000)
+    , max_iterations_(100)
     , tolerance_(1e-9)
     , verbose_(false)
     , save_interval_(1)
 {
+    system_ = std::make_unique<DaeSystem>(circuit);
+}
+
+TransientAnalysis::~TransientAnalysis() = default;
+
+double TransientAnalysis::estimateLteRatio(double dt,
+                                           const std::vector<double>& x_new,
+                                           const std::vector<double>& x_old,
+                                           const std::vector<double>& x_older,
+                                           double reltol, double vntol,
+                                           double abstol) const {
+    const int n = static_cast<int>(x_new.size());
+    double worst = 0.0;
+    for (int i = 0; i < n; ++i) {
+        const double lte = std::abs(dt / 6.0) *
+            std::abs(x_new[i] - 2.0 * x_old[i] + x_older[i]);
+        const double tol = reltol * std::abs(x_new[i]) +
+                           (system_->isCurrentUnknown(i) ? abstol : vntol);
+        if (tol > 0.0) worst = std::max(worst, lte / tol);
+    }
+    return worst;
 }
 
 void TransientAnalysis::createNodeMap(std::vector<int>& node_map) {
-    int num_nodes = circuit_.getNumNodes();
-    node_map.resize(num_nodes, -1);
-    node_map[0] = -1;  // Ground
-    
-    const auto& nodes = circuit_.getNodes();
-    for (size_t i = 0; i < nodes.size(); ++i) {
-        node_map[nodes[i]->getId()] = i;
-    }
-    
-    // Assigns indices for voltage sources and inductors
-    int num_node_vars = nodes.size();
-    int extra_idx = num_node_vars;
-    
-    for (auto device : circuit_.getDevices()) {
-        if (device->getType() == DeviceType::VOLTAGE_SOURCE) {
-            VoltageSource* vs = dynamic_cast<VoltageSource*>(device);
-            if (vs) {
-                vs->setCurrentIndex(extra_idx++);
-            }
-        } else if (device->getType() == DeviceType::INDUCTOR) {
-            Inductor* l = dynamic_cast<Inductor*>(device);
-            if (l) {
-                l->setCurrentIndex(extra_idx++);
-            }
-        }
-    }
-}
-
-void TransientAnalysis::assembleTransientMNA(SparseMatrix& G,
-                                             std::vector<double>& b,
-                                             const std::vector<int>& node_map,
-                                             double timestep,
-                                             bool use_mpi) {
-    // Counts extra variables (V sources and inductors)
-    int num_vsources = circuit_.countVoltageSources();
-    int num_inductors = 0;
-    for (auto device : circuit_.getDevices()) {
-        if (device->getType() == DeviceType::INDUCTOR) {
-            num_inductors++;
-        }
-    }
-    
-    int matrix_size = circuit_.getNodes().size() + num_vsources + num_inductors;
-    b.assign(matrix_size, 0.0);
-    
-    // Stamp of each device
-    const auto& devices = circuit_.getDevices();
-    
-    for (auto device : devices) {
-        DeviceType type = device->getType();
-        
-        if (type == DeviceType::RESISTOR ||
-            type == DeviceType::VOLTAGE_SOURCE ||
-            type == DeviceType::CURRENT_SOURCE) {
-            // Normal DC devices
-            device->stamp(G, b, node_map);
-            
-        } else if (type == DeviceType::CAPACITOR) {
-            // Capacitor uses companion model
-            Capacitor* cap = dynamic_cast<Capacitor*>(device);
-            if (cap) {
-                cap->setTimeStep(timestep);
-                cap->stampTransient(G, b, node_map, timestep);
-            }
-            
-        } else if (type == DeviceType::INDUCTOR) {
-            // Inductor uses companion model
-            Inductor* ind = dynamic_cast<Inductor*>(device);
-            if (ind) {
-                ind->setTimeStep(timestep);
-                ind->stampTransient(G, b, node_map, timestep);
-            }
-        }
-    }
-    
-    (void)use_mpi;  // MPI for assembly will be implemented later
-}
-
-void TransientAnalysis::extractSolution(const std::vector<double>& x,
-                                       const std::vector<int>& node_map) {
-    // Extracts node voltages
-    const auto& nodes = circuit_.getNodes();
-    for (auto node : nodes) {
-        int idx = node_map[node->getId()];
-        if (idx >= 0 && idx < static_cast<int>(x.size())) {
-            node->setVoltage(x[idx]);
-        }
-    }
-    
-    // Extracts currents from voltage sources
-    for (auto device : circuit_.getDevices()) {
-        if (device->getType() == DeviceType::VOLTAGE_SOURCE) {
-            VoltageSource* vs = dynamic_cast<VoltageSource*>(device);
-            if (vs) {
-                int idx = vs->getCurrentIndex();
-                if (idx >= 0 && idx < static_cast<int>(x.size())) {
-                    vs->setCurrent(x[idx]);
-                }
-            }
-        }
-    }
-}
-
-void TransientAnalysis::updateDeviceStates() {
-    // Updates state of reactive devices for next step
-    for (auto device : circuit_.getDevices()) {
-        if (device->getType() == DeviceType::CAPACITOR ||
-            device->getType() == DeviceType::INDUCTOR) {
-            device->updateState();
-        }
-    }
+    node_map = system_->nodeMap();
 }
 
 TransientDataPoint TransientAnalysis::collectDataPoint(double time,
                                                        const std::vector<int>& node_map) {
+    (void)node_map;
     TransientDataPoint point;
     point.time = time;
-    
-    // Collects node voltages
-    const auto& nodes = circuit_.getNodes();
-    point.node_voltages.resize(nodes.size());
-    for (size_t i = 0; i < nodes.size(); ++i) {
-        point.node_voltages[i] = nodes[i]->getVoltage();
+    point.node_voltages.reserve(circuit_.getNodes().size());
+    for (Node* n : circuit_.getNodes()) {
+        point.node_voltages.push_back(n->getVoltage());
     }
-    
-    // Collects currents from sources and inductors
-    for (auto device : circuit_.getDevices()) {
-        if (device->getType() == DeviceType::VOLTAGE_SOURCE ||
-            device->getType() == DeviceType::INDUCTOR) {
-            point.branch_currents.push_back(device->getCurrent());
+    for (Device* d : circuit_.getDevices()) {
+        if (d->numExtraUnknowns() > 0 ||   // V sources, inductors
+            d->getType() == DeviceType::CAPACITOR ||
+            d->getType() == DeviceType::DIODE) {
+            point.branch_currents.push_back(d->getCurrent());
         }
     }
-    
-    (void)node_map;
     return point;
 }
 
-bool TransientAnalysis::timeStep(double t, double dt,
-                                const std::vector<int>& node_map,
-                                bool use_mpi) {
-    // Assembles system for this time step
-    int matrix_size = circuit_.getNodes().size() + 
-                     circuit_.countVoltageSources();
-    
-    // Counts inductors
-    for (auto device : circuit_.getDevices()) {
-        if (device->getType() == DeviceType::INDUCTOR) {
-            matrix_size++;
-        }
-    }
-    
-    SparseMatrix G(matrix_size, matrix_size);
-    std::vector<double> b;
-    
-    assembleTransientMNA(G, b, node_map, dt, use_mpi);
-    G.convertToCSR();
-    
-    // Solves linear system
-    LinearSolver solver(solver_type_);
-    solver.setMaxIterations(max_iterations_);
-    solver.setTolerance(tolerance_);
-    solver.setVerbose(false);  // Not verbose in each step
-    
-    std::vector<double> x;
-    SolverResult result = solver.solve(G, b, x);
-    
-    if (!result.converged) {
-        if (verbose_) {
-            std::cerr << "Warning: Solver did not converge at t=" << t << "s" << std::endl;
-        }
-        return false;
-    }
-    
-    // Extracts solution
-    extractSolution(x, node_map);
-    
-    // Updates device states for next step
-    updateDeviceStates();
-    
-    return true;
-}
 
 TransientResult TransientAnalysis::run(double tstart, double tstop, double tstep,
-                                      bool use_mpi) {
+                                       bool use_mpi) {
+    (void)use_mpi;
     TransientResult result;
     result.success = false;
-    
-    // Validates parameters
-    if (tstep <= 0) {
+
+    if (tstep <= 0.0) {
         result.message = "Time step must be positive";
         return result;
     }
-    
     if (tstop <= tstart) {
         result.message = "Stop time must be greater than start time";
         return result;
     }
-    
-    // Validates circuit
+
     std::string error_msg;
     if (!circuit_.validate(error_msg)) {
         result.message = "Circuit validation failed: " + error_msg;
         return result;
     }
-    
-    MPIManager& mpi = MPIManager::getInstance();
-    if (verbose_ && (!mpi.isInitialized() || mpi.isMaster())) {
-        std::cout << "\n===== Transient Analysis =====" << std::endl;
-        std::cout << "Time: " << tstart << "s to " << tstop << "s" << std::endl;
-        std::cout << "Step: " << tstep << "s" << std::endl;
-        std::cout << "Method: " << (method_ == IntegrationMethod::TRAPEZOIDAL ? 
-                                    "Trapezoidal" : "Backward Euler") << std::endl;
+
+    if (verbose_) {
+        std::cout << "\n===== Transient Analysis (DAE formulation) =====\n";
+        std::cout << "Time: " << tstart << "s to " << tstop << "s, step " << tstep << "s\n";
+        std::cout << "Method: " << (method_ == IntegrationMethod::TRAPEZOIDAL
+                                        ? "Trapezoidal" : "Backward Euler") << "\n";
     }
-    
-    auto start_time = std::chrono::high_resolution_clock::now();
-    
-    // Creates node mapping
+
+    // ================= SETUP =================
+    system_->setup();
+    system_->setMaxIterations(max_iterations_);
+    system_->setRelTol(1e-3);
+    system_->setAbsTol(std::max(1e-15, tolerance_ * 1e-6));
+    system_->setGminSchedule(1e-3, 1e-12);
+    system_->setSolverType(solver_type_);
+    system_->setIntegrator(method_ == IntegrationMethod::TRAPEZOIDAL);
+    system_->setVerbose(verbose_);
+
     std::vector<int> node_map;
     createNodeMap(node_map);
-    
-    // Calculates number of steps
-    int num_steps = static_cast<int>(std::ceil((tstop - tstart) / tstep));
-    
-    // Reserves space for data
-    result.data.reserve(num_steps / save_interval_ + 1);
-    
-    // Temporal simulation
+
+    // ================= BREAKPOINTS =================
+    std::vector<double> breakpoints;
+    system_->requestBreakpoints(breakpoints, tstop);
+    breakpoints.push_back(tstop);
+    std::sort(breakpoints.begin(), breakpoints.end());
+
+    // ================= OPERATING POINT =================
+    // Devices with an initial condition force the IC mode of the OP
+    // (Xyce dcopFlag + ICGiven convention).
+    bool any_ic = false;
+    for (const Device* d : circuit_.getDevices()) {
+        const DeviceType ty = d->getType();
+        if (ty == DeviceType::CAPACITOR || ty == DeviceType::INDUCTOR) {
+            if (const auto* c = dynamic_cast<const class Capacitor*>(d)) {
+                if (c->hasIC()) any_ic = true;
+            }
+            if (const auto* i = dynamic_cast<const class Inductor*>(d)) {
+                if (i->hasIC()) any_ic = true;
+            }
+        }
+    }
+
+    system_->beginSolve(/*initial_solve=*/true);
+    system_->setICOperatingPoint(any_ic);
+    {
+        std::vector<double> guess(system_->size(), 0.0);
+        system_->seedInitialGuess(guess);
+        NLSolveResult op = system_->solveNonlinear(tstart, 0.0, false, guess);
+        if (!op.converged) {
+            result.message = "Operating point failed: " + op.message;
+            return result;
+        }
+        system_->extractSolution();
+        // Freeze the charge/flux history from the operating point.
+        system_->commitStates();
+        system_->initializeHistory();
+    }
+    system_->setICOperatingPoint(false);
+
+    // ================= TIME LOOP =================
+    auto t0 = std::chrono::high_resolution_clock::now();
+
+    result.data.reserve(static_cast<size_t>((tstop - tstart) / tstep) + 2);
+    result.data.push_back(collectDataPoint(tstart, node_map));
+
     double t = tstart;
     int step = 0;
-    
-    // Saves initial condition
-    result.data.push_back(collectDataPoint(t, node_map));
-    
-    while (t < tstop) {
-        double dt = std::min(tstep, tstop - t);
-        
-        if (!timeStep(t, dt, node_map, use_mpi)) {
+    const int num_steps_estimate =
+        static_cast<int>(std::ceil((tstop - tstart) / tstep));
+
+    // Solution history for the LTE estimate (trapezoidal, order 2):
+    //   LTE ≈ (h/6)·|x_{n+1} − 2·x_n + x_{n−1}|
+    std::vector<double> x_prev_prev = system_->solution();   // t_{n-1}
+    std::vector<double> x_prev      = system_->solution();   // t_n
+
+    // Tolerances (SPICE-style: separate voltage/current absolutes)
+    const double lte_reltol = 1e-3;
+    const double lte_vntol  = std::max(1e-9, tolerance_ * 1e-3);
+    const double lte_abstol = std::max(1e-15, tolerance_ * 1e-6);
+    const double max_growth = 4.0;
+
+    double dt_want = tstep;
+
+    while (t < tstop - 1e-18 * std::max(1.0, std::abs(tstop))) {
+        double dt = std::min(dt_want, tstop - t);
+
+        // Never step over a breakpoint.
+        for (double bp : breakpoints) {
+            if (bp > t + 1e-15 * std::abs(bp + 1.0) && bp < t + dt) {
+                dt = bp - t;
+                break;
+            }
+        }
+        // Device-requested maximum step (0.1·PER for PULSE, 0.1/FREQ…)
+        const double dev_hint = system_->maxTimeStepHint(t);
+        if (dev_hint > 0.0) dt = std::min(dt, dev_hint);
+
+        if (dt <= 0.0) break;
+
+        // ---- try the step (reduce dt on Newton failure or LTE reject) ----
+        double ratio = 1.0;
+        bool accepted_step = false;
+        for (int attempt = 0; attempt < 20; ++attempt) {
+            const NLSolveResult nl =
+                system_->solveNonlinear(t + dt, integrationCoeff(dt), true, x_prev);
+
+            if (!nl.converged) {
+                // Too big (or too hard): shrink and retry from the same
+                // accepted point.
+                system_->restoreAcceptedState();
+                dt *= 0.25;
+                if (dt < 1e-15 * std::max(1.0, std::abs(tstop))) break;
+                continue;
+            }
+
+            // LTE check (skipped while the history is too short)
+            if (lte_ready_) {
+                ratio = estimateLteRatio(dt, system_->solution(),
+                                         x_prev, x_prev_prev,
+                                         lte_reltol, lte_vntol, lte_abstol);
+            } else {
+                ratio = 0.0;
+            }
+
+            if (ratio > 1.0) {
+                system_->restoreAcceptedState();
+                dt *= std::max(0.1, 0.9 * std::cbrt(1.0 / ratio));
+                continue;
+            }
+            accepted_step = true;
+            break;
+        }
+
+        if (!accepted_step) {
             result.message = "Time step failed at t=" + std::to_string(t) + "s";
             return result;
         }
-        
+
+        // ---- accept the step ----
         t += dt;
-        step++;
-        
-        // Saves data (if interval allows)
+        ++step;
+        if (step >= 2) lte_ready_ = true;
+        if (lte_ready_) {
+            x_prev_prev = x_prev;
+        }
+        x_prev = system_->solution();
+
+        // Advance the charge/flux history with the integrator formula.
+        system_->acceptTimeStep(integrationCoeff(dt),
+                                method_ == IntegrationMethod::TRAPEZOIDAL);
+        system_->extractSolution();
+
+        // Next step: follow the LTE ratio (bounded growth).
+        const double growth = (ratio > 0.0)
+            ? std::min(max_growth, std::max(0.5, 0.9 * std::cbrt(1.0 / ratio)))
+            : max_growth;
+        dt_want = std::min(tstep, dt * growth);
+
         if (step % save_interval_ == 0) {
             result.data.push_back(collectDataPoint(t, node_map));
         }
-        
-        // Progress callback
         if (progress_callback_) {
-            progress_callback_(t, step, num_steps);
+            progress_callback_(t, step, num_steps_estimate);
         }
-        
-        // Prints progress
-        if (verbose_ && step % 100 == 0 && (!mpi.isInitialized() || mpi.isMaster())) {
-            std::cout << "  Step " << step << "/" << num_steps 
-                     << " (t=" << t << "s)" << std::endl;
+        if (verbose_ && step % 200 == 0) {
+            std::cout << "  step " << step << " (t=" << t << "s, dt=" << dt << ")\n";
         }
     }
-    
-    auto end_time = std::chrono::high_resolution_clock::now();
-    result.total_time = std::chrono::duration<double>(end_time - start_time).count();
-    
+
+    auto t1 = std::chrono::high_resolution_clock::now();
+    result.total_time = std::chrono::duration<double>(t1 - t0).count();
     result.success = true;
     result.message = "Transient analysis completed successfully";
-    
-    if (verbose_ && (!mpi.isInitialized() || mpi.isMaster())) {
-        std::cout << "\nCompleted " << step << " time steps" << std::endl;
-        std::cout << "Total time: " << result.total_time << " s" << std::endl;
-        std::cout << "Time per step: " << (result.total_time / step * 1000) << " ms" << std::endl;
-        std::cout << "==============================\n" << std::endl;
+
+    if (verbose_) {
+        std::cout << "Completed " << step << " steps in " << result.total_time << " s\n";
     }
-    
     return result;
 }
 
-} // namespace e-XSpice
+} // namespace e_XSpice

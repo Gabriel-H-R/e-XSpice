@@ -6,6 +6,7 @@
 #include "../src/core/Circuit.h"
 #include "../src/devices/Resistor.h"
 #include "../src/devices/VoltageSource.h"
+#include "../src/devices/SourceWaveform.h"
 #include "../src/devices/Capacitor.h"
 #include "../src/analysis/TransientAnalysis.h"
 #include "../src/parallel/MPIManager.h"
@@ -24,7 +25,7 @@ int main(int argc, char** argv) {
     Node* n1 = circuit.addNode(1, "1");
     Node* n2 = circuit.addNode(2, "2");
 
-    circuit.addDevice(new VoltageSource("V1", n1, gnd, 5.0));
+    circuit.addDevice(new VoltageSource("V1", n1, gnd, SourceWaveform::dc(5.0)));
     circuit.addDevice(new Resistor("R1", n1, n2, 1000.0));
     circuit.addDevice(new Capacitor("C1", n2, gnd, 1e-6)); // 1uF
 

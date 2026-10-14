@@ -14,6 +14,7 @@
 #define LINEAR_SOLVER_H
 
 #include "SparseMatrix.h"
+#include "MatrixOps.h"
 #include <vector>
 #include <string>
 
@@ -60,10 +61,10 @@ public:
      * @param x0 Initial solution (optional)
      * @return Solver result
      */
-    SolverResult solve(const SparseMatrix& A,
-                      const std::vector<double>& b,
-                      std::vector<double>& x,
-                      const std::vector<double>* x0 = nullptr);
+    SolverResult solve(const MatrixOps& A,
+                       const std::vector<double>& b,
+                       std::vector<double>& x,
+                       const std::vector<double>* x0 = nullptr);
     
     // Settings
     void setMaxIterations(int max_iter) { max_iterations_ = max_iter; }
@@ -83,7 +84,7 @@ private:
      * @brief Conjugate Gradient
      * Works for symmetric positive-definite matrices
      */
-    SolverResult solveConjugateGradient(const SparseMatrix& A,
+    SolverResult solveConjugateGradient(const MatrixOps& A,
                                         const std::vector<double>& b,
                                         std::vector<double>& x,
                                         const std::vector<double>* x0);
@@ -92,10 +93,19 @@ private:
      * @brief BiCGSTAB (Bi-Conjugate Gradient Stabilized)
      * Works for non-symmetric matrices (general MNA case)
      */
-    SolverResult solveBiCGSTAB(const SparseMatrix& A,
+    SolverResult solveBiCGSTAB(const MatrixOps& A,
                                const std::vector<double>& b,
                                std::vector<double>& x,
                                const std::vector<double>* x0);
+    
+    /**
+     * @brief Dense LU with partial pivoting: direct solver for small/medium
+     *        systems and as a robust fallback when a Krylov solver breaks
+     *        down (BiCGSTAB can vanish on non-symmetric MNA systems).
+     */
+    SolverResult solveDenseLU(const MatrixOps& A,
+                              const std::vector<double>& b,
+                              std::vector<double>& x) const;
     
     // Parallelized vector operations
     double dotProduct(const std::vector<double>& a,
