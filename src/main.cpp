@@ -42,16 +42,16 @@ using namespace e_XSpice;
 /**
  * @brief 1. Voltage Divider Circuit (divider.cir)
  */
-Circuit* createDividerCircuit() {
-    Circuit* circuit = new Circuit("Voltage Divider (.cir)");
+std::unique_ptr<Circuit> createDividerCircuit() {
+    auto circuit = std::make_unique<Circuit>("Voltage Divider (.cir)");
     
     Node* gnd = circuit->getGroundNode();
     Node* n1 = circuit->addNode(1, "1");
     Node* n2 = circuit->addNode(2, "2");
     
-    circuit->addDevice(new VoltageSource("V1", n1, gnd, SourceWaveform::dc(10.0)));
-    circuit->addDevice(new Resistor("R1", n1, n2, 1000.0));
-    circuit->addDevice(new Resistor("R2", n2, gnd, 2000.0));
+    circuit->addDevice(make_rcp<VoltageSource>("V1", n1, gnd, SourceWaveform::dc(10.0)));
+    circuit->addDevice(make_rcp<Resistor>("R1", n1, n2, 1000.0));
+    circuit->addDevice(make_rcp<Resistor>("R2", n2, gnd, 2000.0));
     
     return circuit;
 }
@@ -59,8 +59,8 @@ Circuit* createDividerCircuit() {
 /**
  * @brief 2. Multi-Loop Circuit (multiloop.cir)
  */
-Circuit* createMultiLoopCircuit() {
-    Circuit* circuit = new Circuit("Multi-Loop Circuit (.cir)");
+std::unique_ptr<Circuit> createMultiLoopCircuit() {
+    auto circuit = std::make_unique<Circuit>("Multi-Loop Circuit (.cir)");
     
     Node* gnd = circuit->getGroundNode();
     Node* n1 = circuit->addNode(1, "1");
@@ -68,15 +68,15 @@ Circuit* createMultiLoopCircuit() {
     Node* n3 = circuit->addNode(3, "3");
     Node* n4 = circuit->addNode(4, "4");
     
-    circuit->addDevice(new VoltageSource("V1", n1, gnd, SourceWaveform::dc(12.0)));
-    circuit->addDevice(new Resistor("R1", n1, n2, 1000.0));
-    circuit->addDevice(new Resistor("R2", n2, n3, 2000.0));
-    circuit->addDevice(new Resistor("R3", n3, gnd, 1500.0));
-    circuit->addDevice(new Resistor("R4", n2, n4, 3000.0));
-    circuit->addDevice(new Resistor("R5", n4, gnd, 2500.0));
-    circuit->addDevice(new Resistor("R6", n3, n4, 1000.0));
+    circuit->addDevice(make_rcp<VoltageSource>("V1", n1, gnd, SourceWaveform::dc(12.0)));
+    circuit->addDevice(make_rcp<Resistor>("R1", n1, n2, 1000.0));
+    circuit->addDevice(make_rcp<Resistor>("R2", n2, n3, 2000.0));
+    circuit->addDevice(make_rcp<Resistor>("R3", n3, gnd, 1500.0));
+    circuit->addDevice(make_rcp<Resistor>("R4", n2, n4, 3000.0));
+    circuit->addDevice(make_rcp<Resistor>("R5", n4, gnd, 2500.0));
+    circuit->addDevice(make_rcp<Resistor>("R6", n3, n4, 1000.0));
     
-    circuit->addDevice(new CurrentSource("I1", gnd, n4, SourceWaveform::dc(1e-3))); 
+    circuit->addDevice(make_rcp<CurrentSource>("I1", gnd, n4, SourceWaveform::dc(1e-3))); 
     
     return circuit;
 }
@@ -84,16 +84,16 @@ Circuit* createMultiLoopCircuit() {
 /**
  * @brief 3. RC Circuit - Step Response (rc_step.cir)
  */
-Circuit* createRCStepCircuit() {
-    Circuit* circuit = new Circuit("RC Step Response (.cir)");
+std::unique_ptr<Circuit> createRCStepCircuit() {
+    auto circuit = std::make_unique<Circuit>("RC Step Response (.cir)");
     
     Node* gnd = circuit->getGroundNode();
     Node* n1 = circuit->addNode(1, "1");
     Node* n2 = circuit->addNode(2, "2");
     
-    circuit->addDevice(new VoltageSource("V1", n1, gnd, SourceWaveform::dc(5.0)));
-    circuit->addDevice(new Resistor("R1", n1, n2, 1000.0));
-    circuit->addDevice(new Capacitor("C1", n2, gnd, 1e-6));
+    circuit->addDevice(make_rcp<VoltageSource>("V1", n1, gnd, SourceWaveform::dc(5.0)));
+    circuit->addDevice(make_rcp<Resistor>("R1", n1, n2, 1000.0));
+    circuit->addDevice(make_rcp<Capacitor>("C1", n2, gnd, 1e-6));
     
     return circuit;
 }
@@ -101,18 +101,18 @@ Circuit* createRCStepCircuit() {
 /**
  * @brief 4. RLC Series Circuit (rlc_series.cir)
  */
-Circuit* createRLCSeriesCircuit() {
-    Circuit* circuit = new Circuit("RLC Series Circuit (.cir)");
+std::unique_ptr<Circuit> createRLCSeriesCircuit() {
+    auto circuit = std::make_unique<Circuit>("RLC Series Circuit (.cir)");
     
     Node* gnd = circuit->getGroundNode();
     Node* n1 = circuit->addNode(1, "1");
     Node* n2 = circuit->addNode(2, "2");
     Node* n3 = circuit->addNode(3, "3");
     
-    circuit->addDevice(new VoltageSource("V1", n1, gnd, SourceWaveform::dc(10.0)));
-    circuit->addDevice(new Resistor("R1", n1, n2, 100.0));
-    circuit->addDevice(new Inductor("L1", n2, n3, 10e-3));
-    circuit->addDevice(new Capacitor("C1", n3, gnd, 1e-6));
+    circuit->addDevice(make_rcp<VoltageSource>("V1", n1, gnd, SourceWaveform::dc(10.0)));
+    circuit->addDevice(make_rcp<Resistor>("R1", n1, n2, 100.0));
+    circuit->addDevice(make_rcp<Inductor>("L1", n2, n3, 10e-3));
+    circuit->addDevice(make_rcp<Capacitor>("C1", n3, gnd, 1e-6));
     
     return circuit;
 }
@@ -181,14 +181,46 @@ bool simulateNetlist(const std::string& filename, bool use_mpi) {
                     }
                     std::cout << std::endl;
                 }
+
+                // --- Data Export to CSV ---
+                if (!result.data.empty()) {
+                    std::ofstream csv("simulation_output.csv");
+                    if (csv.is_open()) {
+                        csv << "time";
+                        for (size_t j = 0; j < result.data[0].node_voltages.size(); ++j) {
+                            csv << ",V" << (j + 1);
+                        }
+                        csv << "\n";
+
+                        for (const auto& point : result.data) {
+                            csv << point.time;
+                            for (double v : point.node_voltages) {
+                                csv << "," << v;
+                            }
+                            csv << "\n";
+                        }
+                        csv.close();
+                        std::cout << "\n[e-XSpice] Dados salvos em: simulation_output.csv\n";
+                    } else {
+                        std::cerr << "Erro ao criar o arquivo simulation_output.csv\n";
+                    }
+                }
+
+
             } else {
                 std::cerr << "Transient Analysis failed: " << result.message << std::endl;
             }
+
+
         }
     } else {
         if (mpi.isMaster()) std::cerr << "No analysis specified in netlist (use .OP or .TRAN)" << std::endl;
         return false;
     }
+
+    mpi.barrier();
+    std::cout << "[DEBUG] Rank " << mpi.getRank() << " chegou ao fim de simulateNetlist. Inciando destrutores locais...\n";
+
     return true;
 }
 
@@ -197,10 +229,10 @@ int main(int argc, char** argv) {
     mpi.initialize(&argc, &argv);
     
     if (mpi.isMaster()) {
-        std::cout << "\n╔════════════════════════════════════════╗\n";
-        std::cout << "║           -- e-XSpice --               ║\n";
-        std::cout << "║   MPI + OpenMP Parallel Version        ║\n";
-        std::cout << "╚════════════════════════════════════════╝\n\n";
+        std::cout << "\n|--------------------------------------|\n";
+        std::cout << "|           -- e-XSpice --               |\n";
+        std::cout << "|   MPI + OpenMP Parallel Version        |\n";
+        std::cout << "|----------------------------------------|\n\n";
     }
     
     mpi.printInfo();
@@ -216,7 +248,13 @@ int main(int argc, char** argv) {
             return 1;
         }
         bool success = simulateNetlist(argv[2], use_mpi);
+
+        std::cout << "[DEBUG] Rank " << mpi.getRank() << " sobreviveu aos destrutores. Chamando MPI_Finalize...\n";
+
         mpi.finalize();
+
+        std::cout << "[DEBUG] Rank " << mpi.getRank() << " encerrou MPI com sucesso.\n";
+        
         return success ? 0 : 1;
     }
     
@@ -224,7 +262,7 @@ int main(int argc, char** argv) {
     int circuit_choice = 1;
     if (argc > 1) circuit_choice = std::atoi(argv[1]);
     
-    Circuit* circuit = nullptr;
+    std::unique_ptr<Circuit> circuit;
     
     switch (circuit_choice) {
         case 1:
@@ -324,7 +362,6 @@ int main(int argc, char** argv) {
         }
     }
     
-    delete circuit;
     
     if (mpi.isMaster()) {
         std::cout << "\nSimulation completed!\n" << std::endl;

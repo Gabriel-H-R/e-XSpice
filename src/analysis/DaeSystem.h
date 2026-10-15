@@ -23,6 +23,16 @@
  *
  * This is where the "companion model" coefficients come from: the devices
  * never see them (Xyce architecture).
+ *
+ * DISTRIBUTED (MPI) MODE
+ * ----------------------
+ * With an MPIManager attached and the problem above the distribution
+ * thresholds, the system runs in SPMD mode (see parallel/Distribution.h):
+ * each rank evaluates a disjoint device subset into row-replicated buffers
+ * fused by SUM Allreduces, owns a contiguous Krylov row block, and takes
+ * identical Newton/LTE/dt branches (limiting votes use one AND). Below the
+ * thresholds (or with mpi_ == nullptr) every rank runs the serial path
+ * redundantly — always correct, zero communication.
  */
 
 #ifndef DAE_SYSTEM_H
@@ -34,10 +44,13 @@
 #include "../solver/DaeMatrix.h"
 #include "../solver/StateStore.h"
 #include "../solver/LinearSolver.h"
+#include "../parallel/Distribution.h"
 #include <vector>
 #include <string>
 
 namespace e_XSpice {
+
+class MPIManager;   // optional; nullptr = serial mode
 
 /**
  * @brief Outcome of a nonlinear solve.
@@ -173,6 +186,39 @@ public:
     void setIterationTrace(bool v) { very_verbose_ = v; }
 
     /**
+     * @brief Attaches the MPI manager for distributed simulation.
+     *        nullptr (default) = serial mode: every method runs the exact
+     *        same code path as before, with zero communication.
+     *        The analyses pass use_mpi ? &MPIManager::getInstance() : nullptr.
+     */
+    void setMPIManager(MPIManager* mpi) { mpi_ = mpi; }
+
+    /**
+     * @brief Distribution thresholds (see Distribution.h).
+     * @param minDevices minimum device count for device-partitioned assembly
+     * @param minRows    minimum system dimension for distributed Krylov solve
+     */
+    void setDistributionThresholds(int minDevices, int minRows) {
+        distMinDevices_ = minDevices;
+        distMinRows_ = minRows;
+    }
+
+    /**
+     * @brief True when device evaluation is partitioned across ranks.
+     */
+    bool isAssemblyDistributed() const { return plan_.assemblyDistributed; }
+
+    /**
+     * @brief True when the Krylov solve is row-distributed across ranks.
+     */
+    bool isSolveDistributed() const { return plan_.solveDistributed; }
+
+    /**
+     * @brief Number of devices evaluated by this rank (diagnostics).
+     */
+    int numLocalDevices() const;
+
+    /**
      * @brief Total branch-current slots (extra unknowns).
      */
     int numExtraUnknowns() const { return num_extra_; }
@@ -195,6 +241,18 @@ public:
     const std::vector<double>& residualF() const { return F_; }
     const std::vector<double>& rhs() const { return rhs_; }
 
+    /**
+     * @brief Lightweight linear-solve statistics (performance transparency).
+     */
+    struct SolveStats {
+        long long linearSolves = 0;   // total J·dx systems
+        long long krylovIterations = 0;
+        long long directFallbacks = 0;
+        long long distributedSolves = 0;
+    };
+    const SolveStats& solveStats() const { return solveStats_; }
+    void resetSolveStats() { solveStats_ = SolveStats(); }
+
 private:
     Circuit& circuit_;
     std::vector<Device*> devices_;
@@ -212,6 +270,7 @@ private:
     std::vector<double> x_;
     std::vector<double> x_prev_; // last iteration's solution (convergence)
     std::vector<double> x_saved_; // accepted-point snapshot (LTE/retry)
+    std::vector<double> packed_;  // scratch for fused F/Q/B Allreduce
 
     StateStore store_;
 
@@ -229,6 +288,16 @@ private:
     bool   very_verbose_ = false;   // per-iteration trace (diagnostics)
 
     SolverType solver_type_ = SolverType::BICGSTAB;
+    SolveStats solveStats_;            // accumulated (mutable by design)
+
+    // ---- distributed (MPI) state ----
+    MPIManager* mpi_ = nullptr;        // not owned; nullptr = serial
+    DistributionPlan plan_;            // work distribution (serial when size==1)
+    int distMinDevices_ = 64;          // assembly distribution threshold
+    int distMinRows_ = 20000;          // distributed-solve threshold: the
+                                       // row-distributed Krylov pays off only
+                                       // for very large systems (per-iteration
+                                       // collectives dominate below that)
 
     // helpers
     void assembleVectors(double time, double q_coeff);
@@ -239,6 +308,11 @@ private:
     void applyGminResidual();
     void applyGminDiagonal();
     void resolveDiagonalSlots();
+    void syncVectorBuffers();   // Allreduce F/Q/B once per assembly
+    void syncJacobianBuffer();  // Allreduce folded J once per assembly
+    void syncStateHistory();           // Allreduce candidate Q (distributed)
+    void applySolutionLimits();        // limiting write-back (serial only)
+    bool ownsDevice(size_t i) const { return plan_.ownsDevice(static_cast<int>(i)); }
     double currentTime_ = 0.0;
 };
 

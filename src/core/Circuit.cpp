@@ -17,55 +17,45 @@ Circuit::Circuit(const std::string& name)
     , next_node_id_(1)  // 0 is reserved for ground
 {
     // Creates ground node (always exists)
-    ground_node_ = new Node(0, "GND");
+    ground_node_ = make_rcp<Node>(0, "GND");
     node_map_[0] = ground_node_;
     node_name_map_["GND"] = ground_node_;
     node_name_map_["0"] = ground_node_;
 }
 
-Circuit::~Circuit() {
-    // Frees memory of all nodes
-    delete ground_node_;
-    for (auto node : nodes_) {
-        delete node;
-    }
-    
-    // Frees memory of all devices
-    for (auto device : devices_) {
-        delete device;
-    }
-}
+Circuit::~Circuit() = default;   // RCP members release everything
 
 Node* Circuit::addNode(int id, const std::string& name) {
     // Checks if ID already exists
     if (node_map_.find(id) != node_map_.end()) {
         throw std::runtime_error("Node ID " + std::to_string(id) + " already exists");
     }
-    
+
     if (id == 0) {
-        return ground_node_;  // Ground already exists
+        return ground_node_.get();  // Ground already exists
     }
-    
-    Node* node = new Node(id, name);
-    nodes_.push_back(node);
-    node_map_[id] = node;
-    
+
+    RCP<Node> node = make_rcp<Node>(id, name);
+    Node* raw = node.get();
+    nodes_.push_back(std::move(node));
+    node_map_[id] = nodes_.back();
+
     if (!name.empty()) {
-        node_name_map_[name] = node;
+        node_name_map_[name] = nodes_.back();
     }
-    
+
     // Updates next available ID
     if (id >= next_node_id_) {
         next_node_id_ = id + 1;
     }
-    
-    return node;
+
+    return raw;
 }
 
 Node* Circuit::getNode(int id) {
     auto it = node_map_.find(id);
     if (it != node_map_.end()) {
-        return it->second;
+        return it->second.get();
     }
     return nullptr;
 }
@@ -73,29 +63,29 @@ Node* Circuit::getNode(int id) {
 Node* Circuit::getNodeByName(const std::string& name) {
     auto it = node_name_map_.find(name);
     if (it != node_name_map_.end()) {
-        return it->second;
+        return it->second.get();
     }
     return nullptr;
 }
 
-void Circuit::addDevice(Device* device) {
-    if (device == nullptr) {
+void Circuit::addDevice(RCP<Device> device) {
+    if (!device) {
         throw std::invalid_argument("Cannot add null device");
     }
-    
+
     // Checks if name already exists
     if (device_map_.find(device->getName()) != device_map_.end()) {
         throw std::runtime_error("Device " + device->getName() + " already exists");
     }
-    
+
     devices_.push_back(device);
-    device_map_[device->getName()] = device;
+    device_map_[device->getName()] = std::move(device);
 }
 
 Device* Circuit::getDevice(const std::string& name) {
     auto it = device_map_.find(name);
     if (it != device_map_.end()) {
-        return it->second;
+        return it->second.get();
     }
     return nullptr;
 }
@@ -112,7 +102,7 @@ int Circuit::countVoltageSources() const {
 
 void Circuit::reset() {
     ground_node_->reset();
-    for (auto node : nodes_) {
+    for (const auto& node : nodes_) {
         node->reset();
     }
 }

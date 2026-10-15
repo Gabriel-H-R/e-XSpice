@@ -13,11 +13,13 @@
 #include <string>
 #include <vector>
 
+#include "e_XSpice_rcp.h"   // RCP<T>: intrusive refcounted ownership
+
 namespace e_XSpice {
 
 class Device; // Forward declaration
 
-class Node {
+class Node : public RefCounted {
 public:
     /**
      * @brief Default constructor

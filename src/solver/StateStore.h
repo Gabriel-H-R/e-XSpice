@@ -119,6 +119,22 @@ public:
         std::fill(qdot_curr_.begin(), qdot_curr_.end(), 0.0);
     }
 
+    /**
+     * @brief Direct access to the candidate (next) state vector.
+     *        Used by the distributed assembly to SUM-combine the per-rank
+     *        partial histories (each rank evaluates storeState only for the
+     *        devices it owns; unowned slots stay zero locally).
+     */
+    std::vector<double>& nextStateData() { return q_next_; }
+    const std::vector<double>& nextStateData() const { return q_next_; }
+
+    /**
+     * @brief Direct read access to the accepted history (diagnostics and
+     *        output paths; the integrator owns all writes).
+     */
+    const std::vector<double>& acceptedStateData() const { return q_curr_; }
+    const std::vector<double>& acceptedDotData() const { return qdot_curr_; }
+
 private:
     int total_size_ = 0;
 

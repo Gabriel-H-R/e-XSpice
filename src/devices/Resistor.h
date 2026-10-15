@@ -23,15 +23,24 @@
 
 #include "../core/Device.h"
 #include "../core/Node.h"
+#include "../models/core_models/PassiveModels.h"
 
 namespace e_XSpice {
 
 class Resistor : public Device {
 public:
+    /**
+     * @brief Constructor with optional shared model card.
+     * @param model Shared R card (multiplier + TC); null = ideal resistor.
+     *              Effective R = R·Rmult·(1+TC1·ΔT+TC2·ΔT²), evaluated at the
+     *              model's TNOM until temperature stepping exists (so TC
+     *              terms are dormant and only Rmult applies today).
+     */
     Resistor(const std::string& name,
              Node* node_plus,
              Node* node_minus,
-             double resistance);
+             double resistance,
+             RCP<const ResistorModel> model = RCP<const ResistorModel>());
 
     ~Resistor() override = default;
 
@@ -59,6 +68,7 @@ public:
     double getConductance() const { return conductance_; }
     Node*  getNodePlus()   const { return nodes_[0]; }
     Node*  getNodeMinus()  const { return nodes_[1]; }
+    RCP<const ResistorModel> model() const { return model_; }
 
     /**
      * @brief Voltage across the resistor (last accepted solution).
@@ -66,8 +76,9 @@ public:
     double getVoltage() const;
 
 private:
-    double resistance_;   // Resistance (Ω)
-    double conductance_;  // Conductance (S) = 1/R
+    double resistance_;   // Nominal instance resistance (Ω)
+    double conductance_;  // Effective conductance (S) = 1/(R·factor)
+    RCP<const ResistorModel> model_;  // shared card (null = ideal)
 };
 
 } // namespace e_XSpice

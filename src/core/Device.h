@@ -56,6 +56,7 @@
 #include <vector>
 #include <cassert>
 
+#include "e_XSpice_rcp.h"   // RCP<T>: intrusive refcounted ownership
 #include "Node.h"
 #include "StateIndex.h"
 
@@ -84,8 +85,13 @@ enum class DeviceType {
 
 /**
  * @brief Base class for all devices (DAE formulation).
+ *
+ * Inherits RefCounted so devices live in RCP<T> handles owned by Circuit.
+ * Hot paths (assembly loops) keep using raw observer pointers obtained via
+ * .get() — an RCP copy costs an atomic RMW (~13ns measured) while a raw
+ * copy is ~1ns, so RCPs never cross the per-iteration boundary.
  */
-class Device {
+class Device : public RefCounted {
 public:
     Device(const std::string& name, DeviceType type);
     virtual ~Device() = default;
@@ -252,6 +258,21 @@ public:
      */
     virtual double stateCurrent() const { return 0.0; }
 
+    /**
+     * @brief Recomputes the device's cached output quantities (current,
+     *        power helpers) from a fully assembled solution vector.
+     *
+     * Needed by distributed simulation: each rank evaluates loadF/loadQ
+     * only for the devices it owns, so output caches of unowned devices
+     * would be stale. After the solve, the analysis calls this on EVERY
+     * device with the identical global solution, making getCurrent() /
+     * getPower() exact on all ranks. Must be side-effect free w.r.t. the
+     * system (no matrix/vector writes) and deterministic.
+     */
+    virtual void refreshOutputs(const DaeSolution& x, double time) const {
+        (void)x; (void)time;
+    }
+
     // ---------------------------------------------------------------
     // OPERATING MODES
     // ---------------------------------------------------------------
@@ -287,6 +308,24 @@ public:
      * @brief True when the device contributes a linear (constant) stamp.
      */
     virtual bool isLinear() const = 0;
+
+    /**
+     * @brief Writes the LIMITED unknowns back into the solution vector.
+     *
+     * SPICE/Xyce limiting semantics: a nonlinear device that rejected the
+     * iteration (acceptSolution() == false) has already computed the limited
+     * junction voltages used to evaluate F/Q/J. Without a write-back, the
+     * next Newton iteration starts again from the unlimited unknown — and
+     * on a current-source-driven junction the raw unknown can be millions
+     * of volts, so the walk-up (vt per iteration) never converges. Writing
+     * the limited value back restarts the iteration AT the limited point.
+     *
+     * Called by the solver only after an iteration that failed convergence,
+     * and only when `x` is replicated (serial path) — the distributed path
+     * must keep x identical on every rank, which per-device flags cannot
+     * guarantee. Default no-op (linear devices never limit).
+     */
+    virtual void applySolutionLimit(std::vector<double>& x) const { (void)x; }
 
     /**
      * @brief QUERY: is the current solution acceptable by this device?

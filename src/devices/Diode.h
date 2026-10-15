@@ -3,6 +3,13 @@
  * @file Diode.h
  * @brief PN-junction diode — charge-based, robust formulation (Xyce level 1).
  *
+ * The device is AGNOSTIC to the model contents: it holds a shared
+ * `RCP<const DiodeModel>` (physics + precomputed temperature scaling, see
+ * models/DiodeModel.h) plus its own DiodeInstanceParams (AREA, M, TEMP).
+ * Any number of diodes can share one card with zero per-instance copies
+ * and zero per-iteration temperature math — the thermal snapshot is read
+ * through a pointer.
+ *
  * ================================================================
  * CURRENT MODEL (three regions, Xyce N_DEV_Diode.C)
  * ================================================================
@@ -12,11 +19,12 @@
  *        I_norm = IS·(exp(Vd/Vte) − 1) + GMIN·Vd
  *        I_rec  = ISR·(exp(Vd/VteR) − 1)
  *        K_hi   = sqrt(IKF/(IKF + I_norm))          (high-injection knee)
- *        I_D    = K_hi·I_norm + K_hi... (see .cpp for I_rec·K_gen)
+ *        I_D    = K_hi·I_norm + K_gen·I_rec
  *  (b) reverse:   I_D = −IS·(1 + (3·Vte/(e·Vd))³) + GMIN·Vd
  *  (c) breakdown: I_D = −IS·exp(−(BV + Vd)/VteBRK) + GMIN·Vd
  * G_d = dI_D/dVd in every region; the series resistance RS is carried by
- * an internal node (Pri) with conductance Gspr = 1/RS.
+ * an internal node (Pri) with conductance Gspr = 1/RS. Everything is
+ * scaled by AREA and multiplicity M.
  *
  * ================================================================
  * JUNCTION CHARGE (function of V, not an ODE state)
@@ -46,53 +54,39 @@
 #include "../core/Device.h"
 #include "../core/Node.h"
 #include "../solver/StateStore.h"
+#include "../models/core_models/DiodeModel.h"
 #include <cmath>
 
 namespace e_XSpice {
 
-/**
- * @brief Diode model parameters (defaults per SPICE/Xyce level 1).
- */
-struct DiodeModel {
-    double IS  = 1e-14;   // Saturation current (A)
-    double N   = 1.0;     // Emission coefficient
-    double RS  = 0.0;     // Series resistance (Ω)
-    double CJO = 0.0;     // Zero-bias junction capacitance (F)
-    double VJ  = 1.0;     // Junction potential (V)
-    double M   = 0.5;     // Grading coefficient
-    double FC  = 0.5;     // Forward-bias depletion coefficient
-    double BV  = 1e99;    // Reverse breakdown voltage (V); BVGiven=false → off
-    double IBV = 1e-3;    // Current at breakdown (A)
-    double NBV = 1.0;     // Breakdown emission coefficient
-    double TT  = 0.0;     // Transit time (s)
-    double EG  = 1.11;    // Bandgap (eV)
-    double XTI = 3.0;     // IS temperature exponent
-    double AREA = 1.0;    // Area multiplier
-    double IKF = 0.0;     // High-injection knee current (A)
-    double ISR = 0.0;     // Recombination saturation current (A)
-    double NR  = 2.0;     // Recombination emission coefficient
-    double TNOM = 300.15; // Reference temperature (K)
-    double TEMP = 300.15; // Device temperature (K)
-    double GMIN = 1e-12;  // Parallel conductance (S) per junction
-
-    bool BVGiven = false;
-};
-
 class Diode : public Device {
 public:
-    using ModelParams = DiodeModel;
-
+    /**
+     * @brief Full constructor: shared model + per-instance parameters.
+     * @param model  Shared card (from ModelRegistry or make_rcp<DiodeModel>).
+     *               Must already be processParams()'d.
+     * @param inst   Instance overrides (AREA, multiplicity, TEMP).
+     */
     explicit Diode(const std::string& name,
                    Node* anode,
                    Node* cathode,
-                   const ModelParams& params = ModelParams());
+                   RCP<const DiodeModel> model,
+                   const DiodeInstanceParams& inst = DiodeInstanceParams());
+
+    /**
+     * @brief Convenience constructor with the process-wide default model.
+     *        Same physics as before, zero setup.
+     */
+    explicit Diode(const std::string& name,
+                   Node* anode,
+                   Node* cathode);
 
     ~Diode() override = default;
 
     // ---------------------------------------------------------------
     // Setup
     // ---------------------------------------------------------------
-    int numExtraUnknowns() const override { return (params_.RS > 0.0) ? 1 : 0; }
+    int numExtraUnknowns() const override { return (model_->RS > 0.0) ? 1 : 0; }
     int numStateVariables() const override { return 1; }
     int registerStates(StateStore& store) override;
 
@@ -109,6 +103,8 @@ public:
 
     void loadQ(const DaeSolution& x, double time,
                std::vector<double>& Q) const override;
+
+    void applySolutionLimit(std::vector<double>& x) const override;
 
     void loadJacobianF(DaeMatrix& J, const DaeSolution& x,
                        double time) const override;
@@ -134,28 +130,24 @@ public:
     double getPower()   const override;
     double getVoltage() const { return junctionVoltage(); }
 
-    const ModelParams& getParams() const { return params_; }
+    /**
+     * @brief Shared model card (observer; owned by registry/creator).
+     */
+    RCP<const DiodeModel> model() const { return model_; }
+
+    /**
+     * @brief Per-instance parameters.
+     */
+    const DiodeInstanceParams& instanceParams() const { return inst_; }
 
 private:
-    ModelParams params_;
+    RCP<const DiodeModel> model_;   // shared card (never null)
+    DiodeInstanceParams   inst_;    // per-instance overrides
 
-    // temperature-scaled internals
-    double vt_       = 0.0;   // kT/q
-    double vte_      = 0.0;   // N·vt
-    double vteR_     = 0.0;   // NR·vt
-    double vteBRK_   = 0.0;   // NBV·vt
-    double isat_     = 0.0;   // IS(T)
-    double isatR_    = 0.0;   // ISR(T)
-    double tJctPot_  = 0.0;   // VJ(T)
-    double tJctCap_  = 0.0;   // CJO(T)
-    double tDepCap_  = 0.0;   // FC·VJ(T)
-    double F2_       = 0.0;   // (1−FC)^(1+M)
-    double F3_       = 0.0;   // 1−FC·(1+M)
-    double tF1_      = 0.0;   // depletion charge at the transition point
-    double tBrkdwnV_ = 0.0;   // breakdown voltage fitted from BV/IBV
-    double tVcrit_   = 0.0;   // critical voltage for PNJLIM
-    double gspr_     = 0.0;   // 1/RS
-    double ikf_      = 0.0;   // IKF(T)
+    // Thermal snapshot in force: the model's, or the instance override's.
+    // Plain pointer, setup-time binding, zero per-iteration cost.
+    const DiodeThermal* thermal_ = nullptr;
+    DiodeThermal ownThermal_;       // used only when inst_.TEMPGiven
 
     // junction operating state (last limited evaluation)
     mutable double vd_limited_ = 0.0;
@@ -175,14 +167,14 @@ public:
 private:
     static bool debug_;
 
-    int priRow() const { return (params_.RS > 0.0) ? branch_index_ : rowOf(nodes_[0]); }
-
-    void updateTemperature();
-    void fitBreakdownVoltage();
+    int priRow() const {
+        return (model_->RS > 0.0) ? branch_index_ : rowOf(nodes_[0]);
+    }
 
     /**
      * @brief Evaluates current/conductance and junction charge/capacitance
      *        at the (limited) voltage Vd; fills the cached members.
+     *        Result includes AREA and multiplicity scaling.
      */
     void evaluateJunction(double vd) const;
 
@@ -204,7 +196,6 @@ private:
 
     double junctionVoltageFromNodes() const;
     double junctionVoltage() const { return junctionVoltageFromNodes(); }
-    double expClamp(double arg) const { return std::exp(std::min(100.0, arg)); }
 };
 
 } // namespace e_XSpice

@@ -77,6 +77,12 @@ public:
 
     void commitStates(const StateStore& store) override;
 
+    /**
+     * @brief Recomputes cached outputs from the global solution (exact on
+     *        every rank, including ranks that do not own this device).
+     */
+    void refreshOutputs(const DaeSolution& x, double time) const override;
+
     // ---------------------------------------------------------------
     // Outputs
     // ---------------------------------------------------------------

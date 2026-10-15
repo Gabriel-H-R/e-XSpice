@@ -7,133 +7,63 @@
 #include "Diode.h"
 #include "../core/DaeSolution.h"
 #include "../solver/DaeMatrix.h"
+#include "../models/core/DeviceConstants.h"
+#include "../models/core_models/Junction.h"
 #include <stdexcept>
 #include <algorithm>
 
 namespace e_XSpice {
-
-// Xyce constants (N_DEV_Const.h)
-static constexpr double CONSTQ      = 1.6021918e-19;
-static constexpr double CONSTboltz  = 1.3806226e-23;
-static constexpr double CONSTKoverQ = CONSTboltz / CONSTQ;   // 8.6170344e-05 V/K
-static constexpr double CONSTREFTEMP = 300.15;
-static constexpr double CONSTEg0    = 1.16;
-static constexpr double CONSTalphaEg = 7.02e-4;
-static constexpr double CONSTbetaEg  = 1108.0;
-static constexpr double CONSTEg300  = 1.1150877;
-static constexpr double CONSTe      = 2.71828182845904523536028747135;  // e
-static constexpr double CONSTroot2  = 1.41421356237309504880168872421;
-static constexpr double CONSTMAX_EXP_ARG = 100.0;
 
 using std::exp;
 using std::log;
 using std::min;
 using std::max;
 
-// ===============================================================
-// Construction / temperature scaling
-// ===============================================================
-
 bool Diode::debug_ = false;
 
 Diode::Diode(const std::string& name,
              Node* anode,
              Node* cathode,
-             const ModelParams& params)
+             RCP<const DiodeModel> model,
+             const DiodeInstanceParams& inst)
     : Device(name, DeviceType::DIODE)
-    , params_(params)
+    , model_(std::move(model))
+    , inst_(inst)
 {
-    if (params_.IS <= 0.0)  throw std::invalid_argument("Diode IS must be positive");
-    if (params_.N  <= 0.0)  throw std::invalid_argument("Diode N must be positive");
-    if (params_.CJO < 0.0)  throw std::invalid_argument("Diode CJO must be non-negative");
-    if (params_.VJ <= 0.0)  throw std::invalid_argument("Diode VJ must be positive");
+    if (!model_) {
+        throw std::invalid_argument("Diode requires a model card");
+    }
+    if (inst_.AREA <= 0.0) {
+        throw std::invalid_argument("Diode AREA must be positive");
+    }
+    if (inst_.M <= 0.0) {
+        throw std::invalid_argument("Diode multiplicity M must be positive");
+    }
 
-    // History-dependent parameter guards (Xyce Model::processParams)
-    params_.M  = min(params_.M, 0.9);
-    params_.EG = max(params_.EG, 0.1);
-    params_.FC = min(params_.FC, 0.95);
+    // Bind the thermal snapshot once (setup-time): the model's, or the
+    // instance's own when TEMP is overridden. Evaluation then reads plain
+    // doubles through one pointer — no maps, no recomputation in loops.
+    if (inst_.TEMPGiven) {
+        if (inst_.TEMP <= 0.0) {
+            throw std::invalid_argument("Diode TEMP must be positive (Kelvin)");
+        }
+        ownThermal_ = model_->computeThermal(inst_.TEMP + inst_.DTEMP);
+        thermal_ = &ownThermal_;
+    } else {
+        thermal_ = &model_->thermal();
+    }
 
     nodes_.push_back(anode);
     nodes_.push_back(cathode);
     if (anode)   anode->addConnectedDevice(this);
     if (cathode) cathode->addConnectedDevice(this);
-
-    updateTemperature();
-    if (params_.BVGiven) fitBreakdownVoltage();
-    // PNJLIM critical voltage: vcrit = vte·ln(vte/(√2·IS))
-    tVcrit_ = vte_ * log(vte_ / (CONSTroot2 * isat_));
 }
 
-void Diode::updateTemperature() {
-    const double Temp  = params_.TEMP;
-    const double TNOM  = params_.TNOM;
-
-    const double vtnom = CONSTKoverQ * TNOM;
-    const double vt    = CONSTKoverQ * Temp;
-    vt_   = vt;
-    vte_  = params_.N  * vt;
-    vteR_ = params_.NR * vt;
-    vteBRK_ = (params_.NBV > 0.0 ? params_.NBV : 1.0) * vt;
-
-    const double egfet  = CONSTEg0 - (CONSTalphaEg * Temp * Temp) / (Temp + CONSTbetaEg);
-    const double egfet1 = CONSTEg0 - (CONSTalphaEg * TNOM * TNOM) / (TNOM + CONSTbetaEg);
-    const double arg = -egfet / (2.0 * CONSTboltz * Temp)
-                     + CONSTEg300 / (CONSTboltz * (CONSTREFTEMP + CONSTREFTEMP));
-    const double arg1 = -egfet1 / (2.0 * CONSTboltz * TNOM)
-                      + CONSTEg300 / (2.0 * CONSTboltz * CONSTREFTEMP);
-    const double fact2 = Temp / CONSTREFTEMP;
-    const double fact1 = TNOM / CONSTREFTEMP;
-    const double pbfact  = -2.0 * vt  * (1.5 * log(fact2) + CONSTQ * arg);
-    const double pbfact1 = -2.0 * vtnom * (1.5 * log(fact1) + CONSTQ * arg1);
-
-    // junction potential at temperature
-    const double pbo = (params_.VJ - pbfact1) / fact1;
-    const double gmaold = (params_.VJ - pbo) / pbo;
-    tJctPot_ = pbfact + fact2 * pbo;
-    const double gmanew = (tJctPot_ - pbo) / pbo;
-
-    // zero-bias capacitance at temperature
-    tJctCap_ = params_.CJO / (1.0 + params_.M * (4.0e-4 * (TNOM - CONSTREFTEMP) - gmaold));
-    tJctCap_ *= 1.0 + params_.M * (4.0e-4 * (Temp - CONSTREFTEMP) - gmanew);
-
-    // saturation currents at temperature (SPICE3 formula)
-    isat_  = params_.IS  * exp(((Temp / TNOM) - 1.0) * params_.EG / (params_.N  * vt)
-                             + params_.XTI / params_.N  * log(Temp / TNOM));
-    isatR_ = params_.ISR * exp(((Temp / TNOM) - 1.0) * params_.EG / (params_.NR * vt)
-                             + params_.XTI / params_.NR * log(Temp / TNOM));
-
-    tDepCap_ = params_.FC * tJctPot_;
-    const double xfc = log(1.0 - params_.FC);
-    F2_ = exp((1.0 + params_.M) * xfc);          // (1−FC)^(1+M)
-    F3_ = 1.0 - params_.FC * (1.0 + params_.M);
-    tF1_ = tJctPot_ * (1.0 - exp((1.0 - params_.M) * xfc)) / (1.0 - params_.M);
-
-    gspr_ = (params_.RS > 0.0) ? 1.0 / params_.RS : 0.0;
-    ikf_  = params_.IKF;
-}
-
-void Diode::fitBreakdownVoltage() {
-    // Fixed-point fit of tBrkdwnV so that I_D = −IBV at Vd = −BV (Xyce)
-    const double Temp = params_.TEMP, TNOM = params_.TNOM;
-    const double tempBV = params_.BV * (1.0 + (Temp - TNOM) * (0.0 + 0.0 * (Temp - TNOM)));
-    const double reltol = 1.0e-3;
-    const double vt = vt_;
-
-    double cbv = params_.IBV;
-    double xbv = 0.0;
-
-    if (cbv < isat_ * tempBV / vt) {
-        xbv = tempBV;
-    } else {
-        const double tol = reltol * cbv;
-        xbv = tempBV - params_.NBV * vt * log(1.0 + cbv / isat_);
-        for (int i = 0; i < 25; ++i) {
-            xbv = tempBV - params_.NBV * vt * log(cbv / isat_ + 1.0 - xbv / vt);
-            const double xcbv = isat_ * (exp((tempBV - xbv) / (params_.NBV * vt)) - 1.0 + xbv / vt);
-            if (std::abs(xcbv - cbv) <= tol) break;
-        }
-    }
-    tBrkdwnV_ = xbv;
+Diode::Diode(const std::string& name,
+             Node* anode,
+             Node* cathode)
+    : Diode(name, anode, cathode,
+            DiodeModel::defaultModel(), DiodeInstanceParams()) {
 }
 
 // ===============================================================
@@ -169,7 +99,7 @@ void Diode::beginSolve(bool initial_solve) {
     if (initial_solve) {
         // Xyce initJctFlag_: start the first Newton solve from the critical
         // voltage (the most linear point of the exponential region).
-        vd_prev_ = tVcrit_;
+        vd_prev_ = thermal_->tVcrit;
         first_solve_ = true;
     }
 }
@@ -179,89 +109,81 @@ void Diode::beginSolve(bool initial_solve) {
 // ===============================================================
 
 void Diode::evaluateJunction(double vd) const {
-    const double Area = params_.AREA;
-    const double Isat  = isat_ * Area;
-    const double IsatR = isatR_ * Area;
-    const double gmin  = params_.GMIN;
+    const DiodeThermal& t = *thermal_;
+    const double Area = inst_.AREA;
+    const double mult = inst_.M;
+    const double Isat  = t.isat * Area;
+    const double IsatR = t.isatR * Area;
+    const double gmin  = model_->GMIN;
 
-    const double vte   = vte_;
-    const double vteR  = vteR_;
-    const double vteBRK = vteBRK_;
+    const double vte    = t.vte;
+    const double vteR   = t.vteR;
+    const double vteBRK = t.vteBRK;
 
     double Id = 0.0, Gd = 0.0;
 
     if (vd >= -3.0 * vte) {
         // ---- forward / normal exponential region ----
         double arg1 = vd / vte;
-        arg1 = min(CONSTMAX_EXP_ARG, arg1);
+        arg1 = min(Const::MaxExpArg, arg1);
         const double evd = exp(arg1);
 
         const double Inorm = Isat * (evd - 1.0) + gmin * vd;
         const double Gd1    = Isat * evd / vte + gmin;
 
         double arg2 = vd / vteR;
-        arg2 = min(CONSTMAX_EXP_ARG, arg2);
+        arg2 = min(Const::MaxExpArg, arg2);
         const double evdR = exp(arg2);
         const double Irec = IsatR * (evdR - 1.0);
         const double Gd2  = IsatR * evdR / vteR;
 
         // high-injection knee: Khi = sqrt(IKF/(IKF+I_norm))
         double Khi = 1.0, DKhi = 0.0;
-        if (ikf_ > 0.0 && (ikf_ + Inorm) > 0.0) {
-            Khi = sqrt(ikf_ / (ikf_ + Inorm));
-            DKhi = -0.5 * Khi * Gd1 / (ikf_ + Inorm);
+        if (t.ikf > 0.0 && (t.ikf + Inorm) > 0.0) {
+            Khi = sqrt(t.ikf / (t.ikf + Inorm));
+            DKhi = -0.5 * Khi * Gd1 / (t.ikf + Inorm);
         }
 
         // generation-depletion factor for the recombination current
         double Kgen = 0.0, DKgen = 0.0;
-        if (Irec != 0.0 && tJctPot_ > 0.0) {
-            const double u = (1.0 - vd / tJctPot_) * (1.0 - vd / tJctPot_) + 0.005;
-            Kgen = exp(0.5 * params_.M * log(u));              // u^(M/2)
-            const double du = 2.0 * (1.0 - vd / tJctPot_);
-            DKgen = -0.5 * params_.M * du * Kgen / u / tJctPot_;
+        if (Irec != 0.0 && t.tJctPot > 0.0) {
+            const double u = (1.0 - vd / t.tJctPot) * (1.0 - vd / t.tJctPot) + 0.005;
+            Kgen = exp(0.5 * model_->M * log(u));              // u^(M/2)
+            const double du = 2.0 * (1.0 - vd / t.tJctPot);
+            DKgen = -0.5 * model_->M * du * Kgen / u / t.tJctPot;
         }
 
         Id = Inorm * Khi + Irec * Kgen;
         Gd = Gd1 * Khi + Inorm * DKhi + Gd2 * Kgen + Irec * DKgen;
-    } else if (!params_.BVGiven || vd >= -tBrkdwnV_) {
+    } else if (!model_->BVGiven || vd >= -t.tBrkdwnV) {
         // ---- linear reverse-bias region (SPICE3 third-power law) ----
-        double arg = 3.0 * vte / (vd * CONSTe);
+        double arg = 3.0 * vte / (vd * Const::E);
         arg = arg * arg * arg;
         Id = -Isat * (1.0 + arg) + gmin * vd;
         Gd = Isat * 3.0 * arg / vd + gmin;
     } else {
         // ---- reverse breakdown ----
-        double arg1 = -(tBrkdwnV_ + vd) / vteBRK;
-        arg1 = min(CONSTMAX_EXP_ARG, arg1);
+        double arg1 = -(t.tBrkdwnV + vd) / vteBRK;
+        arg1 = min(Const::MaxExpArg, arg1);
         const double evrev = exp(arg1);
         Id = -Isat * evrev + gmin * vd;
         Gd = Isat * evrev / vteBRK + gmin;
     }
 
     // ---------------- junction charge ----------------
-    double Qd = 0.0, Cd = 0.0;
-    if (params_.CJO != 0.0) {
-        const double Czero = tJctCap_ * Area;
-        if (vd < tDepCap_) {
-            const double u  = 1.0 - vd / tJctPot_;
-            const double sarg = exp(-params_.M * log(u));   // u^(−M)
-            Qd = params_.TT * Id + tJctPot_ * Czero * (1.0 - u * sarg) / (1.0 - params_.M);
-            Cd = params_.TT * Gd + Czero * sarg;
-        } else {
-            const double Czof2 = Czero / F2_;
-            const double MotJctPot = params_.M / tJctPot_;
-            Qd = params_.TT * Id + Czero * tF1_ +
-                 Czof2 * (F3_ * (vd - tDepCap_) + 0.5 * MotJctPot *
-                          (vd * vd - tDepCap_ * tDepCap_));
-            Cd = params_.TT * Gd + Czof2 * (F3_ + MotJctPot * vd);
-        }
-    }
-
+    // Shared with the BJT junctions (Junction.h): the SPICE3f5 construction
+    // where Q and C are both C0-continuous at V = FC·VJ. The TT transit term
+    // no longer depends on CJO != 0 (SPICE semantics).
+    const JunctionGeom geom{t.tJctCap * Area, model_->TT, model_->M};
+    const JunctionCap  cap{t.tJctPot, t.tJctCap, t.tDepCap,
+                           t.F2, t.F3, t.tF1};
+    const JunctionChargePoint jc = junctionCharge(vd, Id, Gd, geom, cap);
+    // Multiplicity scales the whole junction (parallel devices).
     vd_limited_ = vd;
-    id_limited_ = Id;
-    gd_limited_ = Gd;
-    qd_limited_ = Qd;
-    cd_limited_ = Cd;
+    id_limited_ = Id * mult;
+    gd_limited_ = Gd * mult;
+    qd_limited_ = jc.q * mult;
+    cd_limited_ = jc.c * mult;
 
     // Remember the limited voltage for the next Newton iteration
     // (Xyce keeps Vd_old in its store vector for exactly this purpose).
@@ -297,15 +219,16 @@ double Diode::limitedJunctionVoltage(const DaeSolution& x) const {
     double vd = vpp - vn;
 
     const double vd_raw = vd;
+    const DiodeThermal& t = *thermal_;
     limiting_active_ = false;
     if (!first_solve_) {
-        if (params_.BVGiven && vd < min(0.0, -params_.BV + 10.0 * vteBRK_)) {
-            const double vdtmp = -(params_.BV + vd);
-            const double vdtmp_old = -(vd_prev_ + params_.BV);
-            const double vnew = pnjlim(vdtmp, vdtmp_old, vteBRK_, tVcrit_);
-            if (vnew != vdtmp) { vd = -(vnew + params_.BV); limiting_active_ = true; }
+        if (model_->BVGiven && vd < min(0.0, -model_->BV + 10.0 * t.vteBRK)) {
+            const double vdtmp = -(model_->BV + vd);
+            const double vdtmp_old = -(vd_prev_ + model_->BV);
+            const double vnew = pnjlim(vdtmp, vdtmp_old, t.vteBRK, t.tVcrit);
+            if (vnew != vdtmp) { vd = -(vnew + model_->BV); limiting_active_ = true; }
         } else {
-            const double vnew = pnjlim(vd, vd_prev_, vte_, tVcrit_);
+            const double vnew = pnjlim(vd, vd_prev_, t.vte, t.tVcrit);
             if (vnew != vd) { vd = vnew; limiting_active_ = true; }
         }
     }
@@ -338,7 +261,7 @@ void Diode::loadF(const DaeSolution& x, double time,
 
     const double v_pri = (ir >= 0) ? x.data()[ir] : 0.0;
     const double v_an  = (ip >= 0) ? x.data()[ip] : 0.0;
-    const double Ir = gspr_ * (v_an - v_pri);
+    const double Ir = thermal_->gspr * (v_an - v_pri);
     const double Id = id_limited_;
 
     if (ip >= 0) F[ip] += Ir;      // current entering anode = resistor current
@@ -348,6 +271,21 @@ void Diode::loadF(const DaeSolution& x, double time,
     if (ir >= 0) F[ir] += (Id - Ir);
 
     first_solve_ = false;
+}
+
+void Diode::applySolutionLimit(std::vector<double>& x) const {
+    if (!limiting_active_) return;
+
+    // SPICE-style limiting write-back: the next Newton iteration restarts
+    // from the limited junction voltage, anchored on the cathode (the
+    // cathode row is never the limited one). With RS = 0 the Pri row IS the
+    // anode row, so a single write covers both cases; a grounded anode has
+    // no row at all (ir < 0) and nothing to write.
+    const int in = rowOf(nodes_[1]);
+    const int ir = priRow();
+    if (ir >= 0) {
+        x[ir] = (in >= 0) ? x[in] + vd_limited_ : vd_limited_;
+    }
 }
 
 void Diode::loadQ(const DaeSolution& x, double time,
@@ -360,14 +298,16 @@ void Diode::loadQ(const DaeSolution& x, double time,
     evaluateJunction(vd);
 
     if (in >= 0) Q[in] -= qd_limited_;
-    if (ir != in) Q[ir] += qd_limited_;
+    // +qd goes to the Pri row; when RS=0 Pri aliases the anode row, and when
+    // the anode is ground (e.g. "D2 0 5 ...") there is no row at all (ir<0).
+    if (ir >= 0 && ir != in) Q[ir] += qd_limited_;
 }
 
 void Diode::loadJacobianF(DaeMatrix& J, const DaeSolution& x,
                          double time) const {
     (void)x; (void)time;
     const double Gd = gd_limited_;
-    const double Gspr = gspr_;
+    const double Gspr = thermal_->gspr;
 
     emit(J, 0,  Gspr);        // [p][p]
     emit(J, 1, -Gspr);        // [p][pri]
@@ -429,41 +369,43 @@ void Diode::confirmAccept() {
 double Diode::currentForVoltage(double vd) const {
     // Evaluates ONLY the conduction current (no cache mutation), used by
     // getCurrent()/output paths.
-    const double Area = params_.AREA;
-    const double Isat = isat_ * Area;
-    const double IsatR = isatR_ * Area;
-    const double gmin = params_.GMIN;
+    const DiodeThermal& t = *thermal_;
+    const double Area = inst_.AREA;
+    const double mult = inst_.M;
+    const double Isat = t.isat * Area;
+    const double IsatR = t.isatR * Area;
+    const double gmin = model_->GMIN;
 
-    if (vd >= -3.0 * vte_) {
-        double arg1 = vd / vte_;
+    if (vd >= -3.0 * t.vte) {
+        double arg1 = vd / t.vte;
         arg1 = std::min(100.0, arg1);
         const double evd = std::exp(arg1);
         const double Inorm = Isat * (evd - 1.0) + gmin * vd;
 
-        double arg2 = vd / vteR_;
+        double arg2 = vd / t.vteR;
         arg2 = std::min(100.0, arg2);
         const double evdR = std::exp(arg2);
         const double Irec = IsatR * (evdR - 1.0);
 
         double Khi = 1.0;
-        if (ikf_ > 0.0 && (ikf_ + Inorm) > 0.0)
-            Khi = std::sqrt(ikf_ / (ikf_ + Inorm));
+        if (t.ikf > 0.0 && (t.ikf + Inorm) > 0.0)
+            Khi = std::sqrt(t.ikf / (t.ikf + Inorm));
 
         double Kgen = 0.0;
-        if (Irec != 0.0 && tJctPot_ > 0.0) {
-            const double u = (1.0 - vd / tJctPot_) * (1.0 - vd / tJctPot_) + 0.005;
-            Kgen = std::exp(0.5 * params_.M * std::log(u));
+        if (Irec != 0.0 && t.tJctPot > 0.0) {
+            const double u = (1.0 - vd / t.tJctPot) * (1.0 - vd / t.tJctPot) + 0.005;
+            Kgen = std::exp(0.5 * model_->M * std::log(u));
         }
-        return Inorm * Khi + Irec * Kgen;
+        return (Inorm * Khi + Irec * Kgen) * mult;
     }
-    if (!params_.BVGiven || vd >= -tBrkdwnV_) {
-        double arg = 3.0 * vte_ / (vd * CONSTe);
+    if (!model_->BVGiven || vd >= -t.tBrkdwnV) {
+        double arg = 3.0 * t.vte / (vd * Const::E);
         arg = arg * arg * arg;
-        return -Isat * (1.0 + arg) + gmin * vd;
+        return (-Isat * (1.0 + arg) + gmin * vd) * mult;
     }
-    double arg1 = -(tBrkdwnV_ + vd) / vteBRK_;
+    double arg1 = -(t.tBrkdwnV + vd) / t.vteBRK;
     arg1 = std::min(100.0, arg1);
-    return -Isat * std::exp(arg1) + gmin * vd;
+    return (-Isat * std::exp(arg1) + gmin * vd) * mult;
 }
 
 double Diode::getCurrent() const {

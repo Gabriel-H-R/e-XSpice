@@ -12,6 +12,8 @@
 #include "../devices/Inductor.h"
 #include "../devices/Diode.h"
 #include "../devices/SourceWaveform.h"
+#include "../devices/Bjt.h"
+#include "../models/core_models/PassiveModels.h"
 
 #include <iostream>
 #include <fstream>
@@ -20,6 +22,7 @@
 #include <cctype>
 #include <cmath>
 #include <map>
+#include <stdexcept>
 
 namespace e_XSpice {
 
@@ -32,6 +35,37 @@ NetlistParser::NetlistParser()
     node_name_to_id_["0"] = 0;
     node_name_to_id_["GND"] = 0;
     node_name_to_id_["gnd"] = 0;
+
+    // Model factories live in the registry itself (built-ins D/R/C/L);
+    // only device-letter dispatch is wired here (extensible via
+    // registerDeviceCreator for Q/M/...).
+    // ---- device-letter dispatch (extensible via registerDeviceCreator) ----
+    creators_['R'] = [this](const std::vector<std::string>& t, Circuit& c) {
+        return parseResistor(t, c);
+    };
+    creators_['C'] = [this](const std::vector<std::string>& t, Circuit& c) {
+        return parseCapacitor(t, c);
+    };
+    creators_['L'] = [this](const std::vector<std::string>& t, Circuit& c) {
+        return parseInductor(t, c);
+    };
+    creators_['V'] = [this](const std::vector<std::string>& t, Circuit& c) {
+        return parseVoltageSource(t, c);
+    };
+    creators_['I'] = [this](const std::vector<std::string>& t, Circuit& c) {
+        return parseCurrentSource(t, c);
+    };
+    creators_['D'] = [this](const std::vector<std::string>& t, Circuit& c) {
+        return parseDiode(t, c);
+    };
+    creators_['Q'] = [this](const std::vector<std::string>& t, Circuit& c) {
+        return parseBjt(t, c);
+    };
+}
+
+void NetlistParser::registerDeviceCreator(char letter, DeviceCreator creator) {
+    creators_[static_cast<char>(std::toupper(static_cast<unsigned char>(letter)))] =
+        std::move(creator);
 }
 
 bool NetlistParser::parse(const std::string& filename, Circuit& circuit) {
@@ -114,56 +148,83 @@ bool NetlistParser::parseLine(const std::string& line, Circuit& circuit) {
     if (tokens.empty()) {
         return true;
     }
-    
-    char first_char = std::toupper(tokens[0][0]);
-    
-    switch (first_char) {
-        case 'R':
-            return parseResistor(tokens, circuit);
-        case 'C':
-            return parseCapacitor(tokens, circuit);
-        case 'L':
-            return parseInductor(tokens, circuit);
-        case 'V':
-            return parseVoltageSource(tokens, circuit);
-        case 'I':
-            return parseCurrentSource(tokens, circuit);
-        case 'D':
-            return parseDiode(tokens, circuit);
-        case '.':
-            return parseCommand(tokens);
-        default:
-            setError("Unknown component type: " + tokens[0]);
-            return false;
+
+    const char first_char =
+        static_cast<char>(std::toupper(static_cast<unsigned char>(tokens[0][0])));
+
+    if (first_char == '.') {
+        return parseCommand(tokens);
     }
+
+    // Device-letter dispatch: the parser core never switch-cases physics.
+    // Unknown letters (Q, M, ...) fail here until someone registers them.
+    const auto it = creators_.find(first_char);
+    if (it == creators_.end()) {
+        setError("Unknown component type: " + tokens[0]);
+        return false;
+    }
+    return it->second(tokens, circuit);
 }
 
 bool NetlistParser::parseResistor(const std::vector<std::string>& tokens, Circuit& circuit) {
+    // R<name> <n+> <n-> [model] <value>
     if (tokens.size() < 4) {
-        setError("Resistor requires: R<name> <n+> <n-> <value>");
+        setError("Resistor requires: R<name> <n+> <n-> [model] <value>");
         return false;
     }
-    
+
     std::string name = tokens[0];
     int node_plus = getNodeId(tokens[1]);
     int node_minus = getNodeId(tokens[2]);
-    double value = parseValue(tokens[3]);
-    
+
+    // Optional shared model card: a token naming a registered R model.
+    // (Checked before numeric parsing so `RMOD` never hits parseValue.)
+    RCP<const ResistorModel> model;
+    size_t value_at = 3;
+    if (tokens.size() > 4) {
+        RCP<const ResistorModel> candidate =
+            models_.findAs<ResistorModel>(tokens[3]);
+        if (candidate) {
+            model = std::move(candidate);
+            value_at = 4;
+        }
+        // else: plain positional value (checked below); a mistyped model
+        // name surfaces as a "cannot parse value" error with its name.
+    }
+    if (tokens.size() <= value_at) {
+        setError("Resistor requires a value");
+        return false;
+    }
+
+    double value = 0.0;
+    try {
+        value = parseValue(tokens[value_at]);
+    } catch (const std::exception& e) {
+        setError(std::string("Resistor value: ") + e.what());
+        return false;
+    }
+
     if (value <= 0) {
         setError("Resistor value must be positive");
         return false;
     }
-    
+
     Node* n_plus = getOrCreateNode(circuit, tokens[1], node_plus);
     Node* n_minus = getOrCreateNode(circuit, tokens[2], node_minus);
-    
-    circuit.addDevice(new Resistor(name, n_plus, n_minus, value));
-    
+
+    try {
+        circuit.addDevice(make_rcp<Resistor>(name, n_plus, n_minus, value,
+                                             std::move(model)));
+    } catch (const std::exception& e) {
+        setError(e.what());
+        return false;
+    }
+
     if (verbose_) {
-        std::cout << "  " << name << ": " << tokens[1] << " - " << tokens[2] 
+        std::cout << "  " << name << ": " << tokens[1] << " - " << tokens[2]
                   << " = " << value << " ohm" << std::endl;
     }
-    
+
     return true;
 }
 
@@ -198,7 +259,7 @@ bool NetlistParser::parseCapacitor(const std::vector<std::string>& tokens, Circu
     Node* n_plus = getOrCreateNode(circuit, tokens[1], node_plus);
     Node* n_minus = getOrCreateNode(circuit, tokens[2], node_minus);
     
-    circuit.addDevice(new Capacitor(name, n_plus, n_minus, value,
+    circuit.addDevice(make_rcp<Capacitor>(name, n_plus, n_minus, value,
                                     ic, ic_given));
     
     if (verbose_) {
@@ -238,7 +299,7 @@ bool NetlistParser::parseInductor(const std::vector<std::string>& tokens, Circui
     Node* n_plus = getOrCreateNode(circuit, tokens[1], node_plus);
     Node* n_minus = getOrCreateNode(circuit, tokens[2], node_minus);
     
-    circuit.addDevice(new Inductor(name, n_plus, n_minus, value,
+    circuit.addDevice(make_rcp<Inductor>(name, n_plus, n_minus, value,
                                    ic, ic_given));
     
     if (verbose_) {
@@ -267,7 +328,7 @@ bool NetlistParser::parseVoltageSource(const std::vector<std::string>& tokens, C
         return false;
     }
     
-    circuit.addDevice(new VoltageSource(name, n_plus, n_minus, waveform));
+    circuit.addDevice(make_rcp<VoltageSource>(name, n_plus, n_minus, waveform));
     
     if (verbose_) {
         std::cout << "  " << name << ": " << tokens[1] << " - " << tokens[2]
@@ -295,7 +356,7 @@ bool NetlistParser::parseCurrentSource(const std::vector<std::string>& tokens, C
         return false;
     }
     
-    circuit.addDevice(new CurrentSource(name, n_plus, n_minus, waveform));
+    circuit.addDevice(make_rcp<CurrentSource>(name, n_plus, n_minus, waveform));
     
     if (verbose_) {
         std::cout << "  " << name << ": " << tokens[1] << " - " << tokens[2]
@@ -307,55 +368,151 @@ bool NetlistParser::parseCurrentSource(const std::vector<std::string>& tokens, C
 
 bool NetlistParser::parseDiode(const std::vector<std::string>& tokens, Circuit& circuit) {
     if (tokens.size() < 4) {
-        setError("Diode requires: D<name> <anode> <cathode> <model> [AREA=<a>]");
+        setError("Diode requires: D<name> <anode> <cathode> <model> [AREA=<a>] [M=<m>]");
         return false;
     }
-    
+
     std::string name = tokens[0];
     int node_anode = getNodeId(tokens[1]);
     int node_cathode = getNodeId(tokens[2]);
     const std::string& model_name = tokens[3];
-    
-    auto it = diode_models_.find(toUpper(model_name));
-    if (it == diode_models_.end()) {
-        setError("Unknown diode model '" + model_name + "' (missing .MODEL card)");
+
+    // The device is agnostic to the card contents: untyped lookup first
+    // (for the "missing .MODEL" message), then a checked downcast.
+    RCP<const DiodeModel> model = models_.findAs<DiodeModel>(model_name);
+    if (!model) {
+        if (models_.find(model_name)) {
+            setError("Model '" + model_name + "' is not a diode (D) model");
+        } else {
+            setError("Unknown diode model '" + model_name + "' (missing .MODEL card)");
+        }
         return false;
     }
-    
-    DiodeModel model = it->second;
+
+    DiodeInstanceParams inst;
     for (size_t i = 4; i < tokens.size(); ++i) {
         const std::string t = toUpper(tokens[i]);
         if (t.find("AREA=") == 0) {
-            model.AREA = parseValue(tokens[i].substr(5));
+            try {
+                inst.AREA = parseValue(tokens[i].substr(5));
+            } catch (const std::exception& e) {
+                setError(std::string("Diode AREA: ") + e.what());
+                return false;
+            }
+        } else if (t.find("M=") == 0) {
+            try {
+                inst.M = parseValue(tokens[i].substr(2));
+            } catch (const std::exception& e) {
+                setError(std::string("Diode M: ") + e.what());
+                return false;
+            }
         }
     }
-    
+
     Node* n_anode = getOrCreateNode(circuit, tokens[1], node_anode);
     Node* n_cathode = getOrCreateNode(circuit, tokens[2], node_cathode);
-    
-    circuit.addDevice(new Diode(name, n_anode, n_cathode, model));
-    
+
+    try {
+        circuit.addDevice(make_rcp<Diode>(name, n_anode, n_cathode,
+                                          std::move(model), inst));
+    } catch (const std::exception& e) {
+        setError(e.what());
+        return false;
+    }
+
     if (verbose_) {
         std::cout << "  " << name << ": " << tokens[1] << " -> " << tokens[2]
                   << " model " << model_name << std::endl;
     }
-    
+
+    return true;
+}
+
+bool NetlistParser::parseBjt(const std::vector<std::string>& tokens, Circuit& circuit) {
+    // Q<name> <collector> <base> <emitter> <model> [AREA=<a>] [TEMP=<degC>]
+    if (tokens.size() < 5) {
+        setError("Transistor requires: Q<name> <C> <B> <E> <model> "
+                 "[AREA=<a>] [TEMP=<c>]");
+        return false;
+    }
+
+    std::string name = tokens[0];
+    const std::string& model_name = tokens[4];   // after C B E
+
+    // The device is agnostic to the card contents: untyped lookup first
+    // (for the "missing .MODEL" message), then the checked downcast.
+    RCP<const BjtModel> model = models_.findAs<BjtModel>(model_name);
+    if (!model) {
+        if (models_.find(model_name)) {
+            setError("Model '" + model_name + "' is not a BJT model "
+                     "(expected .MODEL " + model_name + " NPN|PNP)");
+        } else {
+            setError("Unknown transistor model '" + model_name +
+                     "' (missing .MODEL card)");
+        }
+        return false;
+    }
+
+    BjtInstanceParams inst;
+    for (size_t i = 5; i < tokens.size(); ++i) {
+        const std::string t = toUpper(tokens[i]);
+        if (t.find("AREA=") == 0) {
+            try {
+                inst.AREA = parseValue(tokens[i].substr(5));
+            } catch (const std::exception& e) {
+                setError(std::string("Transistor AREA: ") + e.what());
+                return false;
+            }
+        } else if (t.find("TEMP=") == 0) {
+            try {
+                inst.TEMP = parseValue(tokens[i].substr(5)) + 273.15;
+            } catch (const std::exception& e) {
+                setError(std::string("Transistor TEMP: ") + e.what());
+                return false;
+            }
+            inst.TEMPGiven = true;
+        }
+    }
+
+    Node* n_collector = getOrCreateNode(circuit, tokens[1], getNodeId(tokens[1]));
+    Node* n_base      = getOrCreateNode(circuit, tokens[2], getNodeId(tokens[2]));
+    Node* n_emitter   = getOrCreateNode(circuit, tokens[3], getNodeId(tokens[3]));
+
+    try {
+        circuit.addDevice(make_rcp<Bjt>(name, n_collector, n_base, n_emitter,
+                                        std::move(model), inst));
+    } catch (const std::exception& e) {
+        setError(e.what());
+        return false;
+    }
+
+    if (verbose_) {
+        std::cout << "  " << name << ": c=" << tokens[1] << " b=" << tokens[2]
+                  << " e=" << tokens[3] << " model " << model_name
+                  << (inst.AREA != 1.0 ? " (AREA)" : "") << std::endl;
+    }
+
     return true;
 }
 
 // ===============================================================
 // .MODEL + waveform helpers
 // ===============================================================
-
 bool NetlistParser::parseModel(const std::vector<std::string>& tokens) {
-    // .MODEL <name> D ( P1=V1 P2=V2 ... )
+    // .MODEL <name> <TYPE> ( P1=V1 P2=V2 ... ) — TYPE dispatches through
+    // the registry, so the parser never hardcodes device physics.
     if (tokens.size() < 3) {
         setError(".MODEL requires: .MODEL <name> <type> (...)");
         return false;
     }
-    const std::string name = toUpper(tokens[1]);
-    const std::string type = toUpper(tokens[2]);
-    
+    const std::string name = tokens[1];
+    const std::string type = tokens[2];
+
+    if (!models_.hasModelType(type)) {
+        setError("Unknown .MODEL type '" + type + "' (no factory registered)");
+        return false;
+    }
+
     // Re-join the remainder and split at '(' ...
     std::string joined;
     for (size_t i = 3; i < tokens.size(); ++i) {
@@ -368,52 +525,38 @@ bool NetlistParser::parseModel(const std::vector<std::string>& tokens) {
         return false;
     }
     std::string body = joined.substr(lp + 1, rp - lp - 1);
-    
-    std::vector<std::string> params = tokenize(body);
-    if (type == "D") {
-        DiodeModel m;
-        parseDiodeParams(params, m);
-        diode_models_[name] = m;
-    } else {
-        if (verbose_) {
-            std::cout << "  Ignoring .MODEL of type " << type << std::endl;
+
+    ParamMap params;
+    for (const auto& p : tokenize(body)) {
+        const size_t eq = p.find('=');
+        if (eq == std::string::npos) {
+            setError("Malformed .MODEL parameter '" + p + "' (want KEY=value)");
+            return false;
+        }
+        const std::string key = toUpper(p.substr(0, eq));
+        try {
+            params[key] = parseValue(p.substr(eq + 1));
+        } catch (const std::exception& e) {
+            setError(std::string(".MODEL parameter '") + key + "': " + e.what());
+            return false;
         }
     }
-    
+
+    try {
+        ModelCard card;
+        card.name = name;
+        card.type = type;
+        card.params = std::move(params);
+        models_.createModel(card);
+    } catch (const std::exception& e) {
+        setError(e.what());
+        return false;
+    }
+
     if (verbose_) {
         std::cout << "  .MODEL " << name << " (" << type << ")" << std::endl;
     }
     return true;
-}
-
-void NetlistParser::parseDiodeParams(const std::vector<std::string>& params,
-                                     DiodeModel& m) {
-    for (const auto& p : params) {
-        const size_t eq = p.find('=');
-        if (eq == std::string::npos) continue;
-        const std::string key = toUpper(p.substr(0, eq));
-        const std::string val = p.substr(eq + 1);
-        const double v = parseValue(val);
-        
-        if      (key == "IS" || key == "JS") m.IS = v;
-        else if (key == "N")                m.N = v;
-        else if (key == "RS")               m.RS = v;
-        else if (key == "CJO" || key == "CJ" || key == "CJ0") m.CJO = v;
-        else if (key == "VJ" || key == "PB") m.VJ = v;
-        else if (key == "M")                m.M = v;
-        else if (key == "FC")               m.FC = v;
-        else if (key == "BV" || key == "VB") { m.BV = v; m.BVGiven = true; }
-        else if (key == "IBV")              m.IBV = v;
-        else if (key == "NBV")              m.NBV = v;
-        else if (key == "TT")               m.TT = v;
-        else if (key == "EG")               m.EG = v;
-        else if (key == "XTI")              m.XTI = v;
-        else if (key == "IKF")              m.IKF = v;
-        else if (key == "ISR")              m.ISR = v;
-        else if (key == "NR")               m.NR = v;
-        else if (key == "TNOM")             m.TNOM = v + 273.15;
-        else if (key == "TEMP")             m.TEMP = v + 273.15;
-    }
 }
 
 bool NetlistParser::parseSourceSpec(const std::vector<std::string>& tokens,

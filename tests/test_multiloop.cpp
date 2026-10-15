@@ -27,16 +27,16 @@ int main(int argc, char** argv) {
     Node* n3 = circuit.addNode(3, "3");
     Node* n4 = circuit.addNode(4, "4");
 
-    circuit.addDevice(new VoltageSource("V1", n1, gnd, SourceWaveform::dc(12.0)));
-    circuit.addDevice(new Resistor("R1", n1, n2, 1000.0));
-    circuit.addDevice(new Resistor("R2", n2, n3, 2000.0));
-    circuit.addDevice(new Resistor("R3", n3, gnd, 1500.0));
-    circuit.addDevice(new Resistor("R4", n2, n4, 3000.0));
-    circuit.addDevice(new Resistor("R5", n4, gnd, 2500.0));
-    circuit.addDevice(new Resistor("R6", n3, n4, 1000.0));
+    circuit.addDevice(make_rcp<VoltageSource>("V1", n1, gnd, SourceWaveform::dc(12.0)));
+    circuit.addDevice(make_rcp<Resistor>("R1", n1, n2, 1000.0));
+    circuit.addDevice(make_rcp<Resistor>("R2", n2, n3, 2000.0));
+    circuit.addDevice(make_rcp<Resistor>("R3", n3, gnd, 1500.0));
+    circuit.addDevice(make_rcp<Resistor>("R4", n2, n4, 3000.0));
+    circuit.addDevice(make_rcp<Resistor>("R5", n4, gnd, 2500.0));
+    circuit.addDevice(make_rcp<Resistor>("R6", n3, n4, 1000.0));
     
     // I1 0 4 DC 1m
-    circuit.addDevice(new CurrentSource("I1", gnd, n4, SourceWaveform::dc(1e-3)));
+    circuit.addDevice(make_rcp<CurrentSource>("I1", gnd, n4, SourceWaveform::dc(1e-3)));
 
     // Run DC Analysis
     DCAnalysis dc(circuit);

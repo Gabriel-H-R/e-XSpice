@@ -97,6 +97,10 @@ file(GLOB_RECURSE PARALLEL_SOURCES
     "${CMAKE_SOURCE_DIR}/src/parallel/*.cpp"
 )
 
+file(GLOB_RECURSE MODEL_SOURCES
+    "${CMAKE_SOURCE_DIR}/src/models/*.cpp"
+)
+
 file(GLOB_RECURSE SYMBOLIC_SOURCES
     "${CMAKE_SOURCE_DIR}/libs/symbolic/*.cpp"
 )
@@ -113,6 +117,7 @@ add_library(e-XSpice_lib STATIC
     ${ANALYSIS_SOURCES}
     ${SOLVER_SOURCES}
     ${PARALLEL_SOURCES}
+    ${MODEL_SOURCES}
     ${SYMBOLIC_SOURCES}
 
 )

@@ -14,15 +14,24 @@ namespace e_XSpice {
 Resistor::Resistor(const std::string& name,
                    Node* node_plus,
                    Node* node_minus,
-                   double resistance)
+                   double resistance,
+                   RCP<const ResistorModel> model)
     : Device(name, DeviceType::RESISTOR)
     , resistance_(resistance)
     , conductance_(0.0)
+    , model_(std::move(model))
 {
     if (resistance <= 0.0) {
         throw std::invalid_argument("Resistor resistance must be positive");
     }
-    conductance_ = 1.0 / resistance_;
+    // Effective value folds the shared card in ONCE (setup-time). The
+    // conductance below is what the DAE assembly reads — hot paths are
+    // untouched by the model layer.
+    double effective = resistance;
+    if (model_) {
+        effective *= model_->factor(model_->TNOM);
+    }
+    conductance_ = 1.0 / effective;
 
     nodes_.push_back(node_plus);
     nodes_.push_back(node_minus);

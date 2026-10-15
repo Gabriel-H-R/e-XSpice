@@ -15,9 +15,9 @@ int main() {
     Node* gnd = c.getGroundNode();
     Node* n1 = c.addNode(1, "1");
     Node* n2 = c.addNode(2, "2");
-    c.addDevice(new VoltageSource("V1", n1, gnd, SourceWaveform::dc(10.0)));
-    c.addDevice(new Resistor("R1", n1, n2, 100.0));
-    c.addDevice(new Inductor("L1", n2, gnd, 10e-3, 0.0));
+    c.addDevice(make_rcp<VoltageSource>("V1", n1, gnd, SourceWaveform::dc(10.0)));
+    c.addDevice(make_rcp<Resistor>("R1", n1, n2, 100.0));
+    c.addDevice(make_rcp<Inductor>("L1", n2, gnd, 10e-3, 0.0));
 
     TransientAnalysis tran(c);
     tran.setIntegrationMethod(IntegrationMethod::TRAPEZOIDAL);

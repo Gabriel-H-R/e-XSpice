@@ -15,9 +15,9 @@ int main() {
     Node* n1 = circuit.addNode(1, "1");
     Node* n2 = circuit.addNode(2, "2");
 
-    circuit.addDevice(new VoltageSource("V1", n1, gnd, SourceWaveform::dc(10.0)));
-    circuit.addDevice(new Resistor("R1", n1, n2, 1000.0));
-    circuit.addDevice(new Resistor("R2", n2, gnd, 2000.0));
+    circuit.addDevice(make_rcp<VoltageSource>("V1", n1, gnd, SourceWaveform::dc(10.0)));
+    circuit.addDevice(make_rcp<Resistor>("R1", n1, n2, 1000.0));
+    circuit.addDevice(make_rcp<Resistor>("R2", n2, gnd, 2000.0));
 
     DaeSystem sys(circuit);
     sys.setup();

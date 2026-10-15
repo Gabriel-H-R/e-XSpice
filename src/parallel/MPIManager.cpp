@@ -113,9 +113,16 @@ void MPIManager::gather(const std::vector<double>& local_data,
     }
     
     // Gather of data
-    MPI_Gatherv(local_data.data(), local_size, MPI_DOUBLE,
-                global_data.data(), sizes.data(), displs.data(), MPI_DOUBLE,
+    double dummy = 0.0;
+    const double* send_ptr = local_data.empty() ? &dummy : local_data.data();
+    double* recv_ptr = global_data.empty() ? &dummy : global_data.data();
+
+    MPI_Gatherv(send_ptr, local_size, MPI_DOUBLE,
+                recv_ptr, sizes.data(), displs.data(), MPI_DOUBLE,
                 0, MPI_COMM_WORLD);
+    //MPI_Gatherv(local_data.data(), local_size, MPI_DOUBLE,
+    //            global_data.data(), sizes.data(), displs.data(), MPI_DOUBLE,
+    //            0, MPI_COMM_WORLD);
 }
 
 void MPIManager::scatter(const std::vector<double>& global_data,
@@ -129,19 +136,28 @@ void MPIManager::scatter(const std::vector<double>& global_data,
     
     // Calculates sizes and offsets
     std::vector<int> sizes(size_);
+    // Master collects the expected local_size from each process
+    MPI_Gather(&local_size, 1, MPI_INT, 
+               sizes.data(), 1, MPI_INT, 
+               0, MPI_COMM_WORLD);
+
     std::vector<int> displs(size_, 0);
     
     if (isMaster()) {
         int offset = 0;
         for (int i = 0; i < size_; ++i) {
-            sizes[i] = local_size;
+            //sizes[i] = local_size;
             displs[i] = offset;
-            offset += local_size;
+            offset += sizes[i];
         }
     }
     
-    MPI_Scatterv(global_data.data(), sizes.data(), displs.data(), MPI_DOUBLE,
-                 local_data.data(), local_size, MPI_DOUBLE,
+    // Protection to MS-MPI against acesses to empty .data()
+    const double* send_ptr = global_data.empty() ? nullptr : global_data.data();
+    double* recv_ptr = local_data.empty() ? nullptr : local_data.data();
+
+    MPI_Scatterv(send_ptr, sizes.data(), displs.data(), MPI_DOUBLE,
+                 recv_ptr, local_size, MPI_DOUBLE,
                  0, MPI_COMM_WORLD);
 }
 
@@ -150,6 +166,8 @@ void MPIManager::allReduceSum(const std::vector<double>& local_data,
     if (!initialized_) {
         throw std::runtime_error("MPI not initialized");
     }
+
+    if (local_data.empty()) return;
     
     global_data.resize(local_data.size());
     
@@ -158,22 +176,98 @@ void MPIManager::allReduceSum(const std::vector<double>& local_data,
                   MPI_SUM, MPI_COMM_WORLD);
 }
 
+void MPIManager::allReduceSumInPlace(std::vector<double>& data) {
+    if (!initialized_) {
+        throw std::runtime_error("MPI not initialized");
+    }
+    if (data.empty() || size_ <= 1) {
+        return;   // nothing to combine (single rank: already global)
+    }
+    MPI_Allreduce(MPI_IN_PLACE, data.data(),
+                  static_cast<int>(data.size()), MPI_DOUBLE,
+                  MPI_SUM, MPI_COMM_WORLD);
+}
+
+double MPIManager::allReduceSumDouble(double local) const {
+    if (!initialized_) {
+        throw std::runtime_error("MPI not initialized");
+    }
+    if (size_ <= 1) return local;
+    double global = 0.0;
+    MPI_Allreduce(&local, &global, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    return global;
+}
+
+void MPIManager::allGatherV(const std::vector<double>& local_segment,
+                            std::vector<double>& global,
+                            int totalSize) const {
+    if (!initialized_) {
+        throw std::runtime_error("MPI not initialized");
+    }
+    if (totalSize <= 0) {
+        global.clear();
+        return;
+    }
+    // Block partition is a pure function of (totalSize, rank): every rank
+    // derives the same counts/displacements without communicating.
+    // (Same layout as getLocalRange.)
+    std::vector<int> counts(size_), displs(size_);
+    for (int r = 0; r < size_; ++r) {
+        int s = 0, e = 0;
+        blockRangeForRank(totalSize, r, s, e);
+        counts[r] = e - s;
+        displs[r] = s;
+    }
+    global.assign(totalSize, 0.0);
+
+    double dummy = 0.0;
+    const double* send_ptr = local_segment.empty() ? &dummy : local_segment.data();
+    MPI_Allgatherv(send_ptr, counts[rank_], MPI_DOUBLE,
+                   global.data(), counts.data(), displs.data(), MPI_DOUBLE,
+                   MPI_COMM_WORLD);
+}
+
+bool MPIManager::allReduceAnd(bool local) const {
+    if (!initialized_) {
+        throw std::runtime_error("MPI not initialized");
+    }
+    if (size_ <= 1) return local;
+    int in = local ? 1 : 0, out = 0;
+    MPI_Allreduce(&in, &out, 1, MPI_INT, MPI_LAND, MPI_COMM_WORLD);
+    return out != 0;
+}
+
+bool MPIManager::allReduceOr(bool local) const {
+    if (!initialized_) {
+        throw std::runtime_error("MPI not initialized");
+    }
+    if (size_ <= 1) return local;
+    int in = local ? 1 : 0, out = 0;
+    MPI_Allreduce(&in, &out, 1, MPI_INT, MPI_LOR, MPI_COMM_WORLD);
+    return out != 0;
+}
+
 void MPIManager::getLocalRange(int total_items, int& start, int& end) const {
+    blockRangeForRank(total_items, rank_, start, end);
+}
+
+void MPIManager::blockRangeForRank(int total_items, int rank,
+                                   int& start, int& end) const {
     if (total_items <= 0) {
         start = end = 0;
         return;
     }
-    
+
     // Balanced division
     int base_chunk = total_items / size_;
     int remainder = total_items % size_;
-    
-    if (rank_ < remainder) {
+
+    if (rank < remainder) {
         // First processes get an extra item
-        start = rank_ * (base_chunk + 1);
+        start = rank * (base_chunk + 1);
         end = start + base_chunk + 1;
     } else {
-        start = rank_ * base_chunk + remainder;
+        start = rank * base_chunk + remainder;
         end = start + base_chunk;
     }
 }

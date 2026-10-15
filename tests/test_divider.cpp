@@ -25,11 +25,11 @@ int main(int argc, char** argv) {
     Node* n2 = circuit.addNode(2, "2");
 
     // V1 1 0 DC 10
-    circuit.addDevice(new VoltageSource("V1", n1, gnd, SourceWaveform::dc(10.0)));
+    circuit.addDevice(make_rcp<VoltageSource>("V1", n1, gnd, SourceWaveform::dc(10.0)));
     // R1 1 2 1k
-    circuit.addDevice(new Resistor("R1", n1, n2, 1000.0));
+    circuit.addDevice(make_rcp<Resistor>("R1", n1, n2, 1000.0));
     // R2 2 0 2k
-    circuit.addDevice(new Resistor("R2", n2, gnd, 2000.0));
+    circuit.addDevice(make_rcp<Resistor>("R2", n2, gnd, 2000.0));
 
     // Run DC Analysis
     DCAnalysis dc(circuit);

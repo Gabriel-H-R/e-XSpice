@@ -73,7 +73,10 @@ For Transient Analysis, the companion model approach is used, transforming diffe
 e-XSpice/
 ├── src/
 │   ├── core/           # Circuit topology, Node, Device (DAE contract), parser
-│   ├── devices/        # Physical models (R, C, L, V/I sources, diode, waveforms)
+│   ├── devices/        # Device instances (R, C, L, V/I sources, diode, BJT, waveforms)
+│   ├── models/
+│   │   ├── core/       # Model SYSTEM: DeviceModel, ModelCard, ModelRegistry
+│   │   └── core_models/# Model MATH: Diode, Bjt, passives, shared Junction physics
 │   ├── analysis/       # DaeSystem (DAE/NR core), DCAnalysis, TransientAnalysis
 │   ├── solver/         # DaeMatrix (fixed pattern), StateStore, LinearSolver
 │   ├── parallel/       # MPI communicator wrappers and OpenMP pragmas
@@ -105,6 +108,55 @@ Every device implements five setup methods (`numExtraUnknowns`,
 six evaluation methods (`loadF`, `loadQ`, `loadB`, `loadJacobianF`, `loadJacobianQ`,
 `storeState`). Adding a device (MOSFET, BJT, …) means implementing those — no
 analysis code needs to change.
+
+### The model layer (`src/models/`)
+
+Following Xyce's `DeviceModelPKG` — but with the temperature math hoisted out
+of the per-instance path — every device is agnostic to its model contents:
+
+```
+.MODEL DMOD D (IS=1e-14 N=1.0 ...)     netlist card
+        │  generic ModelCard (no physics in the parser)
+        ▼
+ModelRegistry ──factory──▶ DiodeModel ──shared──▶ D1, D2, ... (RCP)
+   (D/R/C/L built-in;      (validates once, scales to TEMP once;
+    Q/M = 1 registration)   instances read via pointer, zero loop cost)
+```
+
+- `DeviceModel`: abstract card (name, type letter, `processParams`, `updateTemperature`).
+- `ModelRegistry`: owns cards by name, converts generic cards through per-letter factories, typed checked lookup (`findAs<T>` rejects wrong-type cards with a clear error). Built-in factories: `D`, `R`, `C`, `L`, `NPN`, `PNP`.
+- `DiodeModel`: full level-1 physics + one `DiodeThermal` snapshot per card (bandgap `VJ(T)`/`CJO(T)`, `IS(T)`, `tVcrit`, breakdown fit, `F2/F3/tF1` continuity constants). Instances keep only `AREA`/`M`/`TEMP` overrides — an instance-level `TEMP` gets its own snapshot, otherwise it reads the card's.
+- `BjtModel`: **transport (Ebers-Moll) model, level 1, NPN *and* PNP from one card** — `IS/BF/BR/NF/NR`, base-width modulation (`VAF`/`VAR`), transit time `TF`/`TR`, per-junction depletion capacitance (`CJE/VJE/MJE`, `CJC/VJC/MJC`), `IS(T)` per junction, `gmin`. See `Bjt.h` for the complete derivation and the polarity-agnostic stamping.
+- `PassiveModels`: `ResistorModel` (`R` multiplier + `TC1`/`TC2`, wired: `R1 1 2 RMOD 1k`), `CapacitorModel`/`InductorModel` ready for the same path.
+- `Junction.h`: the PN-junction math **shared by diode and BJT** — `Q(V)`/`C(V)` C⁰-continuous at `FC·VJ`, the bandgap temperature scaling and `IS(T)`. Header-only and `inline`: both devices inline it into their `loadF`/`loadQ`, one source of truth, zero call overhead.
+- Parser dispatch is data-driven: device letters go through a creator map, model types through the registry — a new device needs no parser-core changes.
+
+### The BJTs (`src/devices/Bjt.{h,cpp}`)
+
+```
+Q<name>  <collector> <base> <emitter>  <NPN|PNP card>  [AREA=<a>] [TEMP=<degC>]
+```
+
+* Three terminals, no internal nodes; one code path for both polarities (the
+  device remaps the junction voltages, the card stays polarity-agnostic, and
+  **every Jacobian entry is identical for NPN and PNP** — verified by the
+  mirror tests, which compare all terminal values bit-for-bit).
+* Terminal currents: `i_b = I_BE + I_BC`, `i_c = I_CT − I_BC`, `i_e = −i_b − i_c`;
+  charges: `Q_BE = dep(vbe) + τF·i_c`, `Q_BC = dep(vbc) − τR·i_c` — including
+  the transit-charge cross derivatives, so Newton keeps quadratic convergence.
+* Robustness: SPICE3f5 PNJLIM on **both** junctions, and the limiting
+  write-back (`applySolutionLimit`) that restarts the Newton iteration at the
+  limited point — without it a current-source-driven junction (no resistive
+  path) never converges. The diode uses the same hook.
+
+### Newton limiting (write-back)
+
+SPICE/Xyce semantics, now shared by every nonlinear device: an iteration that
+a device rejects (`acceptSolution() == false`) is followed by the device
+writing its **limited unknowns back into the solution vector**, so the next
+iteration starts from the limited point instead of walking the exponential up
+by `Vt` per iteration. Serial path only (the distributed path must keep `x`
+identical on every rank).
 
 ## Building and Compilation 
 
@@ -234,38 +286,67 @@ mpiexec -np 2 ./build/e-xspice 3 10000
 
 ## Parallelization Strategy
 
+The simulator runs in **SPMD mode**: every rank builds the same circuit and
+holds row-replicated assembly buffers plus the fixed sparsity pattern. Work
+— not data — is partitioned (see `src/parallel/Distribution.h`):
+
 ### MPI (Distributed Memory)
 
-- Distributes circuit devices across processes
-- Each process assembles a local portion of the global conductance matrix (G)
-- Uses `MPI_Allreduce` for synchronization during iterative solving
+- **Device-partitioned assembly:** each rank evaluates a disjoint device
+  subset (greedy longest-processing-time assignment weighted by device cost:
+  diodes/modal devices cost more than passives) into local `F/Q/B/J`
+  buffers, fused by one SUM `Allreduce` per buffer per Newton iteration
+  (`F/Q/B` travel packed in a single round trip). Active above 64 devices
+  by default (configurable via `DaeSystem::setDistributionThresholds`).
+- **Row-distributed Krylov solve:** each rank owns a contiguous row block;
+  the solution stays replicated (Newton updates are identical everywhere),
+  so a matvec needs only one `Allgatherv` of the locally computed block
+  plus `Allreduce`d dots — no ghost exchange, no distributed matrix.
+  Active above 20000 unknowns by default (configurable); below that the
+  replicated Krylov + direct-LU fallback runs redundantly (cheaper than
+  the collectives).
+- **Identical control flow:** Newton/LTE/dt decisions derive only from
+  globally synchronized quantities (limiter votes use one `AND`), so every
+  rank takes the same branches with no extra coordination. Verified by the
+  `MPI_Ladder_*` equivalence tests (serial vs 2/4-rank bit-level agreement).
 
 ### OpenMP (Shared Memory)
 
-- Parallelizes matrix assembly within each MPI rank
-- Accelerates Sparse Matrix-Vector multiplication (SpMV) in solvers (CG / BiCGSTAB)
+- Parallelizes device assembly and SpMV within each MPI rank (serial fast
+  paths below size thresholds, so small circuits never pay region overhead).
 
-### Scalability Profile
-
-- For large circuits (>10k nodes), the hybrid parallelism footprint:
+### Tuning
 
 ```text
-4 MPI ranks × 4 OpenMP threads = 16 logical cores
+# Keep total threads ≈ core count (ranks × threads ≤ cores):
+mpiexec -n 4 ./build/e-XSpice file examples/clipper_2000.cir   # + OMP_NUM_THREADS=2
+
+# Force distribution on/off regardless of thresholds (tests, debugging):
+EXSPICE_DISTRIBUTE=1  # force on     EXSPICE_DISTRIBUTE=0  # force serial
 ```
 
-achieves ~10–12× speedup vs serial execution
+Rule of thumb: MPI distribution pays off for device-heavy circuits (costly
+model evaluations amortize the ~5 collectives per Newton iteration) and for
+very large systems via the distributed solve; on a single shared-memory box
+with small/medium linear circuits, serial or pure OpenMP is often faster —
+the thresholds encode exactly that trade-off. Demo circuits:
+`examples/ladder_200.cir` (linear), `examples/clipper_500.cir` and
+`examples/clipper_2000.cir` (nonlinear diode ladders).
 
 
 ## Next Steps (Development Roadmap)
  - [x] Non-linear devices (Diodes + Newton-Raphson): PNJ + GMIN + PNJLIM + junction charge
+ - [x] DeviceModel package (registry + factories, shared D/R/C/L cards, instance overrides)
+ - [x] **Transistors NPN + PNP** (Ebers-Moll transport model, level 1: Early + transit time + per-junction capacitance, one polarity-agnostic code path)
+ - [x] SPICE-style limiting write-back (`applySolutionLimit`) for robust current-source-driven junctions
  - [ ] Diode level-2 / sidewall junction (JSW, CJSW, VJSW)
+ - [ ] BJT level-2 (Gummel-Poon: IKF/IKR high injection, RB/RC/RE ohmic resistances via internal nodes, substrate terminal, XPARTF charge partition)
  - [ ] MOSFET Basic Quadratic model
- - [ ] BJT Basic Exponencial model
  - [ ] AC Analysis (frequency domain) in the DAE framework
  - [ ] MOSFET (BSIM) models
  - [ ] Preconditioning (ILU)
  - [ ] Graph partitioning (METIS)
- - [ ] Distributed (MPI) assembly + solve
+ - [x] Distributed (MPI) assembly + solve (device-partitioned Allreduce fusion + row-distributed BiCGSTAB)
 
 
 ### License

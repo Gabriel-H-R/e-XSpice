@@ -85,6 +85,15 @@ void VoltageSource::requestBreakpoints(std::vector<double>& times,
     waveform_.breakpoints(times, tstop);
 }
 
+void VoltageSource::refreshOutputs(const DaeSolution& x, double time) const {
+    last_current_ = x.data()[branch_index_];
+    const int ip = rowOf(nodes_[0]);
+    const int in = rowOf(nodes_[1]);
+    last_vcap_ = (ip >= 0 ? x.data()[ip] : 0.0)
+               - (in >= 0 ? x.data()[in] : 0.0);
+    last_time_ = time;
+}
+
 double VoltageSource::maxTimeStepHint(double t) const {
     return waveform_.maxTimeStep(t);
 }

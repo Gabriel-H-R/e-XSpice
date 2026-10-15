@@ -103,18 +103,57 @@ public:
      */
     void allReduceSum(const std::vector<double>& local_data,
                       std::vector<double>& global_data);
+
+    /**
+     * @brief In-place AllReduce SUM over all ranks (assembly synchronization).
+     *        No-op when the vector is empty. Uses MPI_IN_PLACE so no second
+     *        buffer is needed.
+     */
+    void allReduceSumInPlace(std::vector<double>& data);
+
+    /**
+     * @brief AllReduce SUM of a single scalar (dot products, norms).
+     */
+    double allReduceSumDouble(double local) const;
+
+    /**
+     * @brief AllGatherv with the same block partition as getLocalRange:
+     *        every rank contributes its local segment and receives the full
+     *        vector. Counts/displacements are derived deterministically from
+     *        totalSize (no extra communication).
+     * @param local_segment This rank's contiguous block (may be empty)
+     * @param global Full vector on every rank (output, resized to totalSize)
+     * @param totalSize Full vector length
+     */
+    void allGatherV(const std::vector<double>& local_segment,
+                    std::vector<double>& global,
+                    int totalSize) const;
+
+    /**
+     * @brief Global logical AND / OR over all ranks (convergence votes).
+     */
+    bool allReduceAnd(bool local) const;
+    bool allReduceOr(bool local) const;
     
     /**
      * @brief Calculates range of indices for this process
-     * 
+     *
      * Divides total_items between size_ processes and returns
      * [start, end) for this rank.
-     * 
+     *
      * @param total_items Total items to divide
      * @param start Initial index (output)
      * @param end Final index (output, exclusive)
      */
     void getLocalRange(int total_items, int& start, int& end) const;
+
+    /**
+     * @brief Block range owned by an arbitrary rank (same layout as
+     *        getLocalRange, but queryable for any rank — used to derive
+     *        collective counts without communication).
+     */
+    void blockRangeForRank(int total_items, int rank,
+                           int& start, int& end) const;
     
     /**
      * @brief Prints process information

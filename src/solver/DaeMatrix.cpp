@@ -57,11 +57,13 @@ void DaeMatrix::finalizePattern() {
     for (int i = 0; i < n_; ++i) {
         const auto lo = std::lower_bound(pattern_.begin(), pattern_.end(),
                                           JacobianEntry(i, 0));
-        const auto hi = std::lower_bound(pattern_.begin(), pattern_.end(),
-                                          JacobianEntry(i + 1, 0));
+        //const auto hi = std::lower_bound(pattern_.begin(), pattern_.end(),
+        //                                  JacobianEntry(i + 1, 0));
         csr_row_ptr_[i]     = static_cast<int>(lo - pattern_.begin());
-        csr_row_ptr_[i + 1] = static_cast<int>(hi - pattern_.begin());
+        //csr_row_ptr_[i + 1] = static_cast<int>(hi - pattern_.begin());
     }
+
+    csr_row_ptr_[n_] = nnz_;
 
     // 3) Fill column indices (pattern_ is sorted by (row,col)) and values.
     csr_col_idx_.resize(nnz_);
@@ -142,8 +144,7 @@ double DaeMatrix::get(int row, int col) const {
 }
 
 void DaeMatrix::multiplyVector(const std::vector<double>& x,
-                               std::vector<double>& y) const {
-    if (static_cast<int>(x.size()) != n_) {
+                               std::vector<double>& y) const {    if (static_cast<int>(x.size()) != n_) {
         throw std::invalid_argument("DaeMatrix::multiplyVector: size mismatch");
     }
     y.resize(n_, 0.0);
@@ -165,6 +166,44 @@ void DaeMatrix::multiplyVector(const std::vector<double>& x,
 
     #pragma omp parallel for schedule(static)
     for (int row = 0; row < n_; ++row) {
+        double sum = 0.0;
+        const int start = csr_row_ptr_[row];
+        const int end   = csr_row_ptr_[row + 1];
+        for (int k = start; k < end; ++k) {
+            sum += csr_values_[k] * x[csr_col_idx_[k]];
+        }
+        y[row] = sum;
+    }
+}
+
+void DaeMatrix::multiplyVectorBlock(const std::vector<double>& x,
+                                    std::vector<double>& y,
+                                    int rowBegin, int rowEnd) const {
+    if (static_cast<int>(x.size()) != n_ ||
+        static_cast<int>(y.size()) != n_) {
+        throw std::invalid_argument("DaeMatrix::multiplyVectorBlock: size mismatch");
+    }
+    if (rowBegin < 0) rowBegin = 0;
+    if (rowEnd > n_) rowEnd = n_;
+    if (rowBegin >= rowEnd) return;
+
+    constexpr int kParallelMin = 512;
+    const int count = rowEnd - rowBegin;
+    if (count < kParallelMin) {
+        for (int row = rowBegin; row < rowEnd; ++row) {
+            double sum = 0.0;
+            const int start = csr_row_ptr_[row];
+            const int end   = csr_row_ptr_[row + 1];
+            for (int k = start; k < end; ++k) {
+                sum += csr_values_[k] * x[csr_col_idx_[k]];
+            }
+            y[row] = sum;
+        }
+        return;
+    }
+
+    #pragma omp parallel for schedule(static)
+    for (int row = rowBegin; row < rowEnd; ++row) {
         double sum = 0.0;
         const int start = csr_row_ptr_[row];
         const int end   = csr_row_ptr_[row + 1];

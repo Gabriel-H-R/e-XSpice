@@ -26,6 +26,7 @@
 #include "../src/devices/Inductor.h"
 #include "../src/devices/Diode.h"
 #include "../src/devices/SourceWaveform.h"
+#include "../src/models/core_models/DiodeModel.h"
 #include "../src/analysis/DCAnalysis.h"
 #include "../src/analysis/TransientAnalysis.h"
 
@@ -44,6 +45,24 @@ static void check(const char* what, double got, double expect, double tol) {
     if (!ok) ++g_failures;
     std::printf("  [%s] %-34s got=% .8g  expect=% .8g  (err=%.2g)\n",
                 ok ? "OK" : "FAIL", what, got, expect, err);
+}
+
+/**
+ * @brief Builds a shared diode card for tests (IS, N, optional CJO/VJ).
+ */
+static RCP<const DiodeModel> diodeCard(double is, double n,
+                                       double cjo = 0.0, double vj = 1.0) {
+    auto m = make_rcp<DiodeModel>("DTEST");
+    m->IS = is;
+    m->N = n;
+    m->CJO = cjo;
+    m->VJ = vj;
+    std::string message;
+    if (!m->processParams(message)) {
+        std::printf("  [FAIL] bad diode card: %s\n", message.c_str());
+        ++g_failures;
+    }
+    return m;
 }
 
 /**
@@ -67,9 +86,9 @@ static void test_dc_divider() {
     Node* gnd = c.getGroundNode();
     Node* n1 = c.addNode(1, "1");
     Node* n2 = c.addNode(2, "2");
-    c.addDevice(new VoltageSource("V1", n1, gnd, SourceWaveform::dc(10.0)));
-    c.addDevice(new Resistor("R1", n1, n2, 1000.0));
-    c.addDevice(new Resistor("R2", n2, gnd, 2000.0));
+    c.addDevice(make_rcp<VoltageSource>("V1", n1, gnd, SourceWaveform::dc(10.0)));
+    c.addDevice(make_rcp<Resistor>("R1", n1, n2, 1000.0));
+    c.addDevice(make_rcp<Resistor>("R2", n2, gnd, 2000.0));
 
     DCAnalysis dc(c);
     DCResult r = dc.run();
@@ -92,9 +111,9 @@ static void test_rc_step() {
     Node* gnd = c.getGroundNode();
     Node* n1 = c.addNode(1, "1");
     Node* n2 = c.addNode(2, "2");
-    c.addDevice(new VoltageSource("V1", n1, gnd, SourceWaveform::dc(V0)));
-    c.addDevice(new Resistor("R1", n1, n2, R));
-    c.addDevice(new Capacitor("C1", n2, gnd, C, 0.0, true));
+    c.addDevice(make_rcp<VoltageSource>("V1", n1, gnd, SourceWaveform::dc(V0)));
+    c.addDevice(make_rcp<Resistor>("R1", n1, n2, R));
+    c.addDevice(make_rcp<Capacitor>("C1", n2, gnd, C, 0.0, true));
 
     TransientAnalysis tran(c);
     tran.setIntegrationMethod(IntegrationMethod::TRAPEZOIDAL);
@@ -122,9 +141,9 @@ static void test_rl_step() {
     Node* gnd = c.getGroundNode();
     Node* n1 = c.addNode(1, "1");
     Node* n2 = c.addNode(2, "2");
-    c.addDevice(new VoltageSource("V1", n1, gnd, SourceWaveform::dc(V)));
-    c.addDevice(new Resistor("R1", n1, n2, R));
-    c.addDevice(new Inductor("L1", n2, gnd, L, 0.0, true));   // IC = 0: true step
+    c.addDevice(make_rcp<VoltageSource>("V1", n1, gnd, SourceWaveform::dc(V)));
+    c.addDevice(make_rcp<Resistor>("R1", n1, n2, R));
+    c.addDevice(make_rcp<Inductor>("L1", n2, gnd, L, 0.0, true));   // IC = 0: true step
 
     TransientAnalysis tran(c);
     tran.setIntegrationMethod(IntegrationMethod::TRAPEZOIDAL);
@@ -160,11 +179,11 @@ static void test_rlc_series() {
     Node* n3 = c.addNode(3, "3");
     // Step at t=0+: PULSE(0 → Vc0) so the operating point is the all-zero
     // state (a DC source would close the loop through the shorted inductor).
-    c.addDevice(new VoltageSource("V1", n1, gnd,
+    c.addDevice(make_rcp<VoltageSource>("V1", n1, gnd,
               SourceWaveform::pulse(0.0, Vc0, 0.0, 1e-9, 1e-9, 2e-3, 4e-3)));
-    c.addDevice(new Resistor("R1", n1, n2, R));
-    c.addDevice(new Inductor("L1", n2, n3, L, 0.0, false));
-    c.addDevice(new Capacitor("C1", n3, gnd, C, 0.0, false));
+    c.addDevice(make_rcp<Resistor>("R1", n1, n2, R));
+    c.addDevice(make_rcp<Inductor>("L1", n2, n3, L, 0.0, false));
+    c.addDevice(make_rcp<Capacitor>("C1", n3, gnd, C, 0.0, false));
 
     TransientAnalysis tran(c);
     tran.setIntegrationMethod(IntegrationMethod::TRAPEZOIDAL);
@@ -185,18 +204,16 @@ static void test_rlc_series() {
 
 static void test_diode_dc() {
     std::printf("\n5) Diode DC operating point (Shockley + KVL)\n");
-    DiodeModel m;
-    m.IS = 1e-14;
-    m.N  = 1.0;
+    RCP<const DiodeModel> card = diodeCard(1e-14, 1.0);
     const double Vt = 1.380649e-23 * 300.15 / 1.602176634e-19;
 
     Circuit c("diode_dc");
     Node* gnd = c.getGroundNode();
     Node* n1 = c.addNode(1, "1");
     Node* n2 = c.addNode(2, "2");
-    c.addDevice(new VoltageSource("V1", n1, gnd, SourceWaveform::dc(5.0)));
-    c.addDevice(new Resistor("R1", n1, n2, 1000.0));
-    c.addDevice(new Diode("D1", n2, gnd, m));   // anode=n2, cathode=gnd
+    c.addDevice(make_rcp<VoltageSource>("V1", n1, gnd, SourceWaveform::dc(5.0)));
+    c.addDevice(make_rcp<Resistor>("R1", n1, n2, 1000.0));
+    c.addDevice(make_rcp<Diode>("D1", n2, gnd, card));   // anode=n2, cathode=gnd
 
     DCAnalysis dc(c);
     DCResult r = dc.run();
@@ -209,33 +226,29 @@ static void test_diode_dc() {
     double lo = 0.0, hi = Vs;
     for (int i = 0; i < 200; ++i) {
         const double mid = 0.5 * (lo + hi);
-        const double id = m.IS * (std::exp(mid / Vt) - 1.0);
+        const double id = card->IS * (std::exp(mid / Vt) - 1.0);
         const double ir = (Vs - mid) / Rser;
         if (ir > id) lo = mid; else hi = mid;
     }
     const double expect = 0.5 * (lo + hi);
     std::printf("  (Vd = %.6f V, Id = %.6g A)\n", vd,
-                m.IS * (std::exp(vd / Vt) - 1.0));
+                card->IS * (std::exp(vd / Vt) - 1.0));
     check("V(D1) forward drop", vd, expect, 5e-4);
 }
 
 static void test_diode_rectifier() {
     std::printf("\n6) Half-wave rectifier (diode + junction charge)\n");
-    DiodeModel m;
-    m.IS = 1e-12;
-    m.N  = 1.0;
-    m.CJO = 1e-9;
-    m.VJ = 0.7;
+    RCP<const DiodeModel> card = diodeCard(1e-12, 1.0, 1e-9, 0.7);
 
     Circuit c("rect");
     Node* gnd = c.getGroundNode();
     Node* n1 = c.addNode(1, "1");
     Node* n2 = c.addNode(2, "2");
-    c.addDevice(new VoltageSource("V1", n1, gnd,
+    c.addDevice(make_rcp<VoltageSource>("V1", n1, gnd,
               SourceWaveform::sin(0.0, 5.0, 1000.0, 0.0, 0.0, 0.0)));
-    c.addDevice(new Diode("D1", n1, n2, m));
-    c.addDevice(new Resistor("RL", n2, gnd, 1000.0));
-    c.addDevice(new Capacitor("CL", n2, gnd, 1e-7, 0.0, false));
+    c.addDevice(make_rcp<Diode>("D1", n1, n2, card));
+    c.addDevice(make_rcp<Resistor>("RL", n2, gnd, 1000.0));
+    c.addDevice(make_rcp<Capacitor>("CL", n2, gnd, 1e-7, 0.0, false));
 
     TransientAnalysis tran(c);
     tran.setIntegrationMethod(IntegrationMethod::TRAPEZOIDAL);
@@ -271,9 +284,9 @@ static void test_capacitor_ic() {
     Node* n1 = c.addNode(1, "1");
     Node* n2 = c.addNode(2, "2");
     // Source starts at 0 V, cap charged to 2 V: RC discharge from 2 V.
-    c.addDevice(new VoltageSource("V1", n1, gnd, SourceWaveform::dc(0.0)));
-    c.addDevice(new Resistor("R1", n1, n2, 1000.0));
-    c.addDevice(new Capacitor("C1", n2, gnd, 1e-6, 2.0, true));   // IC = 2 V
+    c.addDevice(make_rcp<VoltageSource>("V1", n1, gnd, SourceWaveform::dc(0.0)));
+    c.addDevice(make_rcp<Resistor>("R1", n1, n2, 1000.0));
+    c.addDevice(make_rcp<Capacitor>("C1", n2, gnd, 1e-6, 2.0, true));   // IC = 2 V
 
     TransientAnalysis tran(c);
     tran.setIntegrationMethod(IntegrationMethod::TRAPEZOIDAL);
@@ -313,7 +326,7 @@ RL 4 0 100
     check("node count", c.getNumNodes(), 5, 0);   // nodes 1..4 + ground
 
     bool has_diode = false, has_ind = false;
-    for (Device* d : c.getDevices()) {
+    for (const auto& d : c.getDevices()) {
         if (d->getType() == DeviceType::DIODE) has_diode = true;
         if (d->getType() == DeviceType::INDUCTOR) has_ind = true;
     }

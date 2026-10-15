@@ -6,6 +6,7 @@
 
 #include "DCAnalysis.h"
 #include "DaeSystem.h"
+#include "../parallel/MPIManager.h"
 #include <iostream>
 #include <chrono>
 #include <algorithm>
@@ -23,8 +24,7 @@ DCAnalysis::DCAnalysis(Circuit& circuit)
 
 DCResult DCAnalysis::run(bool use_mpi, bool use_initial_guess) {
     DCResult result;
-    (void)use_mpi;         // DC is a single dense-reduction ep; OpenMP is
-    (void)use_initial_guess; // used inside the solver. MPI: future work.
+    (void)use_initial_guess;
 
     std::string error_msg;
     if (!circuit_.validate(error_msg)) {
@@ -36,6 +36,7 @@ DCResult DCAnalysis::run(bool use_mpi, bool use_initial_guess) {
     auto t0 = std::chrono::high_resolution_clock::now();
 
     DaeSystem system(circuit_);
+    system.setMPIManager(use_mpi ? &MPIManager::getInstance() : nullptr);
     system.setup();
     system.setMaxIterations(max_iterations_);
     system.setRelTol(1e-3);
@@ -74,10 +75,10 @@ DCResult DCAnalysis::run(bool use_mpi, bool use_initial_guess) {
 
     result.node_voltages.clear();
     result.branch_currents.clear();
-    for (Node* n : circuit_.getNodes()) {
+    for (const auto& n : circuit_.getNodes()) {
         result.node_voltages.push_back(n->getVoltage());
     }
-    for (Device* d : circuit_.getDevices()) {
+    for (const auto& d : circuit_.getDevices()) {
         result.branch_currents.push_back(d->getCurrent());
     }
 

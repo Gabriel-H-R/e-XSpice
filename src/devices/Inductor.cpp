@@ -154,6 +154,19 @@ void Inductor::commitStates(const StateStore& store) {
     (void)store;
 }
 
+void Inductor::refreshOutputs(const DaeSolution& x, double time) const {
+    (void)time;
+    if (isICOperatingPoint() && ic_given_) {
+        last_current_ = initial_current_;
+    } else {
+        last_current_ = x.data()[branch_index_];
+    }
+    const int ip = rowOf(nodes_[0]);
+    const int in = rowOf(nodes_[1]);
+    vcap_cache_ = (ip >= 0 ? x.data()[ip] : 0.0)
+                - (in >= 0 ? x.data()[in] : 0.0);
+}
+
 double Inductor::getPower() const {
     return vcap_cache_ * last_current_;
 }

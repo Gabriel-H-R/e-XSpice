@@ -1,0 +1,33 @@
+* BJT (Ebers-Moll transport model) demo: NPN + PNP common-emitter stages
+* ------------------------------------------------------------------
+* One shared model card per polarity, two instances of each (the stages are
+* independent). The PNP stage is the exact electrical mirror of the NPN one:
+* same 2 V base drive (sign flipped), same 100k base drive resistor, same 1k
+* collector load, ±5 V rails.
+*
+*   NPN: ib = (Vdrive - Vbe)/RB, ic = BF*ib, Vc = 5 - ic*RC
+*   PNP: the same with every voltage/current sign flipped.
+* ------------------------------------------------------------------
+
+.MODEL QN NPN (IS=1e-16 BF=120 NF=1 VAF=100 TF=0.3n CJE=4p VJE=0.75 MJE=0.33 CJC=2p VJC=0.75 MJC=0.33)
+.MODEL QP PNP (IS=1e-16 BF=80  NF=1 VAF=60  TF=0.3n CJE=4p VJE=0.75 MJE=0.33 CJC=2p VJC=0.75 MJC=0.33)
+
+* ---- NPN stage (collector 2, base 5, emitter 0) ----
+VCC 1 0 DC 5
+VIN 6 0 PULSE(0 2 1u 20n 20n 2u 4u)
+RB  6 5 100k
+Q1  2 5 0 QN
+RC  1 2 1k
+
+* ---- PNP stage (dual of the NPN: collector 20, base 22, emitter 0) ----
+* The exact electrical mirror: emitter grounded, the base driven 0.78 V
+* BELOW ground, the collector load pulled towards a -5 V rail.
+VEE 21 0 DC -5
+VB  23 0 PULSE(0 -2 1u 20n 20n 2u 4u)
+RB2 23 22 100k
+Q2  20 22 0 QP
+RC2 20 21 1k
+
+.OP
+.TRAN 20n 6u 0
+.END

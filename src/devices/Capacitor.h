@@ -109,6 +109,14 @@ private:
 
     double vcap() const { return vcap_cache_; }
 
+    /**
+     * @brief True only when THIS capacitor enforces its initial condition
+     *        as a voltage source (it owns a branch unknown only then).
+     *        The global flag is set whenever any device in the circuit has
+     *        IC=, so the per-device ic_given_ check is mandatory.
+     */
+    bool inICMode() const { return ic_given_ && isICOperatingPoint(); }
+
     void refreshVcap(const DaeSolution& x) const;
 };
 

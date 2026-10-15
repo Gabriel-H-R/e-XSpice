@@ -147,6 +147,17 @@ public:
     void multiplyVector(const std::vector<double>& x,
                         std::vector<double>& y) const override;
 
+    /**
+     * @brief Computes only rows [rowBegin, rowEnd) of y = A*x.
+     *        Rows outside the block are left untouched. Used by the
+     *        row-distributed Krylov solver: each rank evaluates its own
+     *        block from the replicated matrix and the replicated x, then
+     *        the blocks are fused with one Allgatherv.
+     */
+    void multiplyVectorBlock(const std::vector<double>& x,
+                             std::vector<double>& y,
+                             int rowBegin, int rowEnd) const;
+
     // MatrixOps interface
     bool isSymmetric() const override { return false; }
 

@@ -68,6 +68,31 @@ double LinearSolver::vectorNorm(const std::vector<double>& v) const {
     return std::sqrt(dotProduct(v, v));
 }
 
+bool LinearSolver::verifyTrueResidual(const MatrixOps& A,
+                                      const std::vector<double>& b,
+                                      const std::vector<double>& x,
+                                      double b_norm,
+                                      SolverResult& result) const {
+    std::vector<double> Ax;
+    A.multiplyVector(x, Ax);
+    double sum = 0.0;
+    const size_t n = b.size();
+    for (size_t i = 0; i < n; ++i) {
+        const double d = b[i] - Ax[i];
+        sum += d * d;
+    }
+    const double true_norm = std::sqrt(sum);
+    result.residual_norm = true_norm;
+    if (true_norm / b_norm < tolerance_) {
+        result.converged = true;
+        result.message = "Converged";
+        return true;
+    }
+    result.converged = false;
+    result.message = "True residual too large (recurrence drifted)";
+    return false;
+}
+
 void LinearSolver::vectorScale(std::vector<double>& v, double alpha) const {
     const int n = static_cast<int>(v.size());
 
@@ -288,8 +313,9 @@ SolverResult LinearSolver::solveBiCGSTAB(
         for (int i = 0; i < n; ++i) s[i] = r[i] - alpha * v[i];
         if (converged(s)) {
             for (int i = 0; i < n; ++i) x[i] += alpha * ph[i];
-            result.converged = true;
-            result.message = "Converged";
+            // Guard against recurrence drift: only a true residual counts.
+            // On failure the caller falls back to the direct solver.
+            verifyTrueResidual(A, b, x, b_norm, result);
             break;
         }
         
@@ -305,13 +331,13 @@ SolverResult LinearSolver::solveBiCGSTAB(
         
         // x += α·p̂ + ω·ŝ
         for (int i = 0; i < n; ++i) x[i] += alpha * ph[i] + omega * sh[i];
-        
+
         // r = s − ω·t
         for (int i = 0; i < n; ++i) r[i] = s[i] - omega * t[i];
-        
+
         if (converged(r)) {
-            result.converged = true;
-            result.message = "Converged";
+            // Guard against recurrence drift (see above).
+            verifyTrueResidual(A, b, x, b_norm, result);
             break;
         }
         if (std::abs(omega) < 1e-300) {

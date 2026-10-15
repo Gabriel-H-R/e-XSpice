@@ -93,7 +93,7 @@ void Capacitor::loadF(const DaeSolution& x, double time,
 void Capacitor::loadQ(const DaeSolution& x, double time,
                       std::vector<double>& Q) const {
     (void)time;
-    if (isICOperatingPoint()) return;   // at the IC operating point: no charge load
+    if (inICMode()) return;   // at the IC operating point: no charge load
 
     refreshVcap(x);
     const int ip = rowOf(nodes_[0]);
@@ -107,7 +107,7 @@ void Capacitor::loadQ(const DaeSolution& x, double time,
 void Capacitor::loadJacobianF(DaeMatrix& J, const DaeSolution& x,
                               double time) const {
     (void)x; (void)time;
-    if (isICOperatingPoint()) {
+    if (inICMode()) {
         // IC-OP: 0-V source (branch equation v+ − v− = IC lives in F)
         emit(J, 2,  1.0);   // [p][bra]
         emit(J, 5, -1.0);   // [n][bra]
@@ -125,7 +125,7 @@ void Capacitor::loadJacobianF(DaeMatrix& J, const DaeSolution& x,
 void Capacitor::loadJacobianQ(DaeMatrix& J, const DaeSolution& x,
                               double time) const {
     (void)x; (void)time;
-    if (isICOperatingPoint()) return;   // no charge term at the IC-OP
+    if (inICMode()) return;   // no charge term at the IC-OP
 
     emit(J, 0,  capacitance_);   // [p][p]
     emit(J, 1, -capacitance_);   // [p][n]

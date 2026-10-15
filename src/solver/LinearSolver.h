@@ -112,6 +112,23 @@ private:
                      const std::vector<double>& b) const;
     
     double vectorNorm(const std::vector<double>& v) const;
+
+    /**
+     * @brief True-residual verification: recomputes r = b − A·x from scratch
+     *        and checks it against the tolerance.
+     *
+     * Krylov recurrences track the residual implicitly, which can drift from
+     * the true residual on ill-conditioned systems (here: s = 2/dt up to
+     * 1e14 makes J = dFdx + s·dQdx extremely scaled). Accepting a drifted
+     * "converged" step silently corrupts Newton. On failure the caller falls
+     * back to the direct solver. Costs one extra matvec per solve.
+     * @return true when the true residual meets the tolerance
+     */
+    bool verifyTrueResidual(const MatrixOps& A,
+                            const std::vector<double>& b,
+                            const std::vector<double>& x,
+                            double b_norm,
+                            SolverResult& result) const;
     
     void vectorScale(std::vector<double>& v, double alpha) const;
     

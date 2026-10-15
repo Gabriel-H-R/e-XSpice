@@ -5,12 +5,14 @@
  */
 
 #include "DaeSystem.h"
+#include "../parallel/MPIManager.h"
+#include "../parallel/DistributedKrylov.h"
 #include <algorithm>
 #include <cmath>
 #include <chrono>
 #include <omp.h>
-#include <cstdio>
 #include <iostream>
+#include <numeric>
 
 namespace e_XSpice {
 
@@ -23,15 +25,28 @@ DaeSystem::DaeSystem(Circuit& circuit)
 
 void DaeSystem::setup() {
     // ---- 1) node map: ground is never materialized ----
+    // The map is indexed by NODE ID (which SPICE netlists may space
+    // sparsely: 1 2 3 11 12 ...), so it must be sized by the LARGEST id,
+    // not by the number of nodes. Sizing it by count is a silent OOB write
+    // on the first sparse id (heap corruption) — fixed here.
     const auto& nodes = circuit_.getNodes();
     num_nodes_ = static_cast<int>(nodes.size());
-    node_map_.assign(circuit_.getNumNodes(), -1);
+    int max_id = 0;
+    for (const auto& n : nodes) {
+        max_id = std::max(max_id, n->getId());
+    }
+    node_map_.assign(static_cast<size_t>(max_id) + 1, -1);
     for (int i = 0; i < num_nodes_; ++i) {
         node_map_[nodes[i]->getId()] = i;
     }
 
     // ---- 2) extra unknowns (branch currents) ----
-    devices_.assign(circuit_.getDevices().begin(), circuit_.getDevices().end());
+    // Observer views (raw pointers): hot paths never copy an RCP.
+    devices_.clear();
+    devices_.reserve(circuit_.getDevices().size());
+    for (const auto& d : circuit_.getDevices()) {
+        devices_.push_back(d.get());
+    }
     num_extra_ = 0;
     for (Device* d : devices_) {
         num_extra_ += std::max(0, d->numExtraUnknowns());
@@ -117,6 +132,24 @@ void DaeSystem::setup() {
     rhs_.assign(n_, 0.0);
     x_.assign(n_, 0.0);
     x_prev_.assign(n_, 0.0);
+
+    // ---- 7) distribution plan (identical on every rank, no comm) ----
+    int rank = 0, size = 1;
+    if (mpi_ && mpi_->isInitialized()) {
+        rank = mpi_->getRank();
+        size = mpi_->getSize();
+    }
+    plan_ = buildDistributionPlan(devices_, n_, rank, size,
+                                  distMinDevices_, distMinRows_);
+}
+
+int DaeSystem::numLocalDevices() const {
+    if (!plan_.assemblyDistributed) return static_cast<int>(devices_.size());
+    int count = 0;
+    for (size_t i = 0; i < devices_.size(); ++i) {
+        if (ownsDevice(i)) ++count;
+    }
+    return count;
 }
 
 void DaeSystem::resolveDiagonalSlots() {
@@ -137,35 +170,75 @@ void DaeSystem::assembleVectors(double time, double q_coeff) {
     std::fill(Q_.begin(), Q_.end(), 0.0);
     std::fill(B_.begin(), B_.end(), 0.0);
 
+    // Evaluates the owned devices (all of them when serial). Each rank
+    // accumulates only its own subset; syncAssemblyBuffers() fuses them.
+    auto evalDevice = [&](size_t i) {
+        Device* d = devices_[i];
+        d->loadF(sol, time, F_);
+        if (q_coeff != 0.0) d->loadQ(sol, time, Q_);
+        d->loadB(time, B_);
+    };
+
     // Small circuits: the serial path avoids OpenMP overhead.
     if (nd <= 32) {
-        for (Device* d : devices_) {
-            d->loadF(sol, time, F_);
-            if (q_coeff != 0.0) d->loadQ(sol, time, Q_);
-            d->loadB(time, B_);
+        for (size_t i = 0; i < nd; ++i) {
+            if (ownsDevice(i)) evalDevice(i);
         }
-        return;
-    }
-
-    // Large circuits: one scratch set per thread reduced once at the end.
-    #pragma omp parallel
-    {
-        std::vector<double> f(n_, 0.0), q(n_, 0.0), b(n_, 0.0);
-        #pragma omp for schedule(dynamic, 16) nowait
-        for (int i = 0; i < static_cast<int>(nd); ++i) {
-            devices_[i]->loadF(sol, time, f);
-            if (q_coeff != 0.0) devices_[i]->loadQ(sol, time, q);
-            devices_[i]->loadB(time, b);
-        }
-        #pragma omp critical
+    } else {
+        // Large circuits: one scratch set per thread reduced once at the end.
+        #pragma omp parallel
         {
-            for (int i = 0; i < n_; ++i) {
-                F_[i] += f[i];
-                Q_[i] += q[i];
-                B_[i] += b[i];
+            std::vector<double> f(n_, 0.0), q(n_, 0.0), b(n_, 0.0);
+            #pragma omp for schedule(dynamic, 16) nowait
+            for (int i = 0; i < static_cast<int>(nd); ++i) {
+                if (!ownsDevice(static_cast<size_t>(i))) continue;
+                Device* d = devices_[i];
+                d->loadF(sol, time, f);
+                if (q_coeff != 0.0) d->loadQ(sol, time, q);
+                d->loadB(time, b);
+            }
+            #pragma omp critical
+            {
+                for (int i = 0; i < n_; ++i) {
+                    F_[i] += f[i];
+                    Q_[i] += q[i];
+                    B_[i] += b[i];
+                }
             }
         }
     }
+
+    syncVectorBuffers();
+}
+
+void DaeSystem::syncVectorBuffers() {
+    // Fuse the per-rank partial F/Q/B into the identical global vectors.
+    // Called EXACTLY ONCE per assembly (in assembleVectors).
+    //
+    // The three vectors travel in a SINGLE Allreduce (packed scratch buffer)
+    // instead of three: collectives are latency-bound, so one round trip
+    // instead of three is ~3x less synchronization overhead per Newton
+    // iteration. The pack/unpack memcpys are bandwidth-cheap by comparison.
+    if (!plan_.assemblyDistributed || !mpi_) return;
+    if (packed_.size() != F_.size() + Q_.size() + B_.size()) {
+        packed_.resize(F_.size() + Q_.size() + B_.size(), 0.0);
+    }
+    auto* dst = packed_.data();
+    std::copy(F_.begin(), F_.end(), dst); dst += F_.size();
+    std::copy(Q_.begin(), Q_.end(), dst); dst += Q_.size();
+    std::copy(B_.begin(), B_.end(), dst);
+    mpi_->allReduceSumInPlace(packed_);
+    const auto* src = packed_.data();
+    std::copy(src, src + F_.size(), F_.begin()); src += F_.size();
+    std::copy(src, src + Q_.size(), Q_.begin()); src += Q_.size();
+    std::copy(src, src + B_.size(), B_.begin());
+}
+
+void DaeSystem::syncJacobianBuffer() {
+    // Fuse the per-rank partial Jacobian (already folded J = dFdx + s·dQdx).
+    // Called EXACTLY ONCE per assembly (in assembleJacobians).
+    if (!plan_.assemblyDistributed || !mpi_) return;
+    mpi_->allReduceSumInPlace(jac_f_.values());
 }
 
 void DaeSystem::assembleJacobians(double time, double q_coeff) {
@@ -176,14 +249,16 @@ void DaeSystem::assembleJacobians(double time, double q_coeff) {
     jac_q_.zeroValues();
 
     if (nd <= 32) {
-        for (Device* d : devices_) {
-            d->loadJacobianF(jac_f_, sol, time);
-            d->loadJacobianQ(jac_q_, sol, time);
+        for (size_t i = 0; i < nd; ++i) {
+            if (!ownsDevice(i)) continue;
+            devices_[i]->loadJacobianF(jac_f_, sol, time);
+            devices_[i]->loadJacobianQ(jac_q_, sol, time);
         }
     } else {
         // Fully parallel: each device writes only its own NNZ slots.
         #pragma omp parallel for schedule(dynamic, 16)
         for (int i = 0; i < static_cast<int>(nd); ++i) {
+            if (!ownsDevice(static_cast<size_t>(i))) continue;
             devices_[i]->loadJacobianF(jac_f_, sol, time);
             devices_[i]->loadJacobianQ(jac_q_, sol, time);
         }
@@ -191,7 +266,8 @@ void DaeSystem::assembleJacobians(double time, double q_coeff) {
 
     // Effective Jacobian  J = dFdx + s·dQdx. Both matrices share the same
     // pattern (hence identical nnz ordering), so the fold is a single linear
-    // pass over the value arrays — no maps, no reordering.
+    // pass over the value arrays — no maps, no reordering. The fold happens
+    // BEFORE the Allreduce so only one Jacobian crosses the network.
     if (q_coeff != 0.0) {
         std::vector<double>& jf = jac_f_.values();
         const std::vector<double>& jq = jac_q_.values();
@@ -201,6 +277,8 @@ void DaeSystem::assembleJacobians(double time, double q_coeff) {
             jf[k] += q_coeff * jq[k];
         }
     }
+
+    syncJacobianBuffer();
 }
 
 void DaeSystem::applyGminResidual() {
@@ -216,6 +294,13 @@ void DaeSystem::applyGminDiagonal() {
     if (node_gmin_ == 0.0) return;
     for (int i = 0; i < num_nodes_; ++i) {
         jac_f_.accumulateSlot(diagonal_slots_[i], node_gmin_);
+    }
+}
+
+void DaeSystem::applySolutionLimits() {
+    // Only ever called on the replicated (serial) path — see solveNonlinear.
+    for (Device* d : devices_) {
+        d->applySolutionLimit(x_);
     }
 }
 
@@ -235,24 +320,51 @@ void DaeSystem::buildRHS(double q_coeff, bool use_history) {
 bool DaeSystem::checkConvergence(const std::vector<double>& x_new) const {
     // SPICE-style: |Δx| ≤ abstol + reltol·|x_new| for every unknown, and no
     // nonlinear device may reject the iteration (limiting active).
-    for (const Device* d : devices_) {
-        if (!d->acceptSolution()) return false;
-    }
-    for (int i = 0; i < n_; ++i) {
-        const double delta = std::abs(x_new[i] - x_prev_[i]);
-        if (delta > abstol_ + reltol_ * std::abs(x_new[i])) {
-            return false;
+    // Only OWNED devices are queried (other ranks' flags are stale by
+    // design). The single AND fuses the votes so every rank decides
+    // identically — x itself is identical everywhere, so the delta test
+    // needs no communication but is folded into the same vote.
+    bool local = true;
+    for (size_t i = 0; i < devices_.size(); ++i) {
+        if (ownsDevice(i) && !devices_[i]->acceptSolution()) {
+            local = false;
+            break;
         }
     }
-    return true;
+    if (local) {
+        for (int i = 0; i < n_; ++i) {
+            const double delta = std::abs(x_new[i] - x_prev_[i]);
+            if (delta > abstol_ + reltol_ * std::abs(x_new[i])) {
+                local = false;
+                break;
+            }
+        }
+    }
+    if (plan_.assemblyDistributed && mpi_) {
+        return mpi_->allReduceAnd(local);
+    }
+    return local;
 }
 
 bool DaeSystem::solveLinearSystem(std::vector<double>& dx) {
-    LinearSolver solver(solver_type_);
-    solver.setMaxIterations(2000);
-    solver.setTolerance(1e-12);
-    const SolverResult r = solver.solve(jac_f_, rhs_, dx);
-    if (r.converged) return true;
+    ++solveStats_.linearSolves;
+    if (plan_.solveDistributed && mpi_) {
+        ++solveStats_.distributedSolves;
+        SolverResult r = distributedBiCGSTAB(jac_f_, rhs_, dx,
+                                             plan_.rowBegin, plan_.rowEnd,
+                                             *mpi_, 2000, 1e-12);
+        solveStats_.krylovIterations += r.iterations;
+        if (r.converged) return true;
+        // Fall through to the replicated direct fallback (the fused Jacobian
+        // is identical on every rank, so no communication is needed).
+    } else {
+        LinearSolver solver(solver_type_);
+        solver.setMaxIterations(2000);
+        solver.setTolerance(1e-12);
+        const SolverResult r = solver.solve(jac_f_, rhs_, dx);
+        solveStats_.krylovIterations += r.iterations;
+        if (r.converged) return true;
+    }
 
     // Robust fallback: the Krylov solver can break down on strongly
     // non-symmetric MNA Jacobians; a direct solve always succeeds/fails
@@ -260,6 +372,7 @@ bool DaeSystem::solveLinearSystem(std::vector<double>& dx) {
     if (solver_type_ != SolverType::DIRECT_LU && n_ <= 20000) {
         LinearSolver direct(SolverType::DIRECT_LU);
         const SolverResult rd = direct.solve(jac_f_, rhs_, dx);
+        if (rd.converged) ++solveStats_.directFallbacks;
         return rd.converged;
     }
     return false;
@@ -275,6 +388,7 @@ NLSolveResult DaeSystem::solveNonlinear(double time,
                                         const std::vector<double>& x0) {
     NLSolveResult result;
     const auto t0 = std::chrono::high_resolution_clock::now();
+    currentTime_ = time;
 
     if (!x0.empty()) x_ = x0;
     std::vector<double> dx(n_, 0.0);
@@ -309,6 +423,14 @@ NLSolveResult DaeSystem::solveNonlinear(double time,
                 result.iterations = iter;
                 return true;
             }
+
+            // SPICE/Xyce limiting feedback: devices that rejected the
+            // iteration write their limited unknowns back into x, so the
+            // next iteration restarts AT the limited point instead of
+            // walking the exponential up by vt per iteration. Serial path
+            // only: the distributed path must keep x identical on every
+            // rank (per-device limiting flags are rank-local by design).
+            if (!plan_.assemblyDistributed) applySolutionLimits();
         }
         return false;
     };
@@ -338,7 +460,9 @@ NLSolveResult DaeSystem::solveNonlinear(double time,
     // Charge/state of the ACCEPTED point (post-update x).
     if (ok) {
         commitStates();
-        for (Device* d : devices_) d->confirmAccept();
+        for (size_t i = 0; i < devices_.size(); ++i) {
+            if (ownsDevice(i)) devices_[i]->confirmAccept();
+        }
     }
 
     node_gmin_ = 0.0;
@@ -350,9 +474,24 @@ NLSolveResult DaeSystem::solveNonlinear(double time,
 
 void DaeSystem::commitStates() {
     DaeSolution sol(x_, circuit_, node_map_);
-    for (Device* d : devices_) {
-        d->storeState(sol, store_);
+    // CRITICAL: clear the whole candidate history first. Each rank writes
+    // only its OWNED slots below; without this, unowned slots keep the
+    // previous step's fused values and the SUM fusion below would add stale
+    // history on top of fresh history (double counting that grows every
+    // step and destabilizes the trapezoidal qdot feedback).
+    std::fill(store_.nextStateData().begin(), store_.nextStateData().end(),
+              0.0);
+    for (size_t i = 0; i < devices_.size(); ++i) {
+        if (ownsDevice(i)) devices_[i]->storeState(sol, store_);
     }
+    syncStateHistory();
+}
+
+void DaeSystem::syncStateHistory() {
+    // Each rank wrote Q(x) only for its owned devices (other slots are zero
+    // locally); one SUM fuses the identical candidate history everywhere.
+    if (!plan_.assemblyDistributed || !mpi_) return;
+    mpi_->allReduceSumInPlace(store_.nextStateData());
 }
 
 void DaeSystem::acceptTimeStep(double q_coeff, bool trapezoidal) {
@@ -366,6 +505,12 @@ void DaeSystem::extractSolution() {
     const auto& nodes = circuit_.getNodes();
     for (int i = 0; i < num_nodes_; ++i) {
         nodes[i]->setVoltage(x_[i]);
+    }
+    // Refresh every device's cached outputs from the identical global
+    // solution (unowned devices would otherwise report stale values).
+    DaeSolution sol(x_, circuit_, node_map_);
+    for (Device* d : devices_) {
+        d->refreshOutputs(sol, currentTime_);
     }
 }
 

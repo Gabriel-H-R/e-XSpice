@@ -23,6 +23,7 @@
 
 #include "TransientAnalysis.h"
 #include "DaeSystem.h"
+#include "../parallel/MPIManager.h"
 #include "../devices/Capacitor.h"
 #include "../devices/Inductor.h"
 #include <algorithm>
@@ -73,10 +74,10 @@ TransientDataPoint TransientAnalysis::collectDataPoint(double time,
     TransientDataPoint point;
     point.time = time;
     point.node_voltages.reserve(circuit_.getNodes().size());
-    for (Node* n : circuit_.getNodes()) {
+    for (const auto& n : circuit_.getNodes()) {
         point.node_voltages.push_back(n->getVoltage());
     }
-    for (Device* d : circuit_.getDevices()) {
+    for (const auto& d : circuit_.getDevices()) {
         if (d->numExtraUnknowns() > 0 ||   // V sources, inductors
             d->getType() == DeviceType::CAPACITOR ||
             d->getType() == DeviceType::DIODE) {
@@ -89,7 +90,6 @@ TransientDataPoint TransientAnalysis::collectDataPoint(double time,
 
 TransientResult TransientAnalysis::run(double tstart, double tstop, double tstep,
                                        bool use_mpi) {
-    (void)use_mpi;
     TransientResult result;
     result.success = false;
 
@@ -116,6 +116,7 @@ TransientResult TransientAnalysis::run(double tstart, double tstop, double tstep
     }
 
     // ================= SETUP =================
+    system_->setMPIManager(use_mpi ? &MPIManager::getInstance() : nullptr);
     system_->setup();
     system_->setMaxIterations(max_iterations_);
     system_->setRelTol(1e-3);
@@ -124,6 +125,17 @@ TransientResult TransientAnalysis::run(double tstart, double tstop, double tstep
     system_->setSolverType(solver_type_);
     system_->setIntegrator(method_ == IntegrationMethod::TRAPEZOIDAL);
     system_->setVerbose(verbose_);
+
+    if (verbose_) {
+        std::cout << "Distribution: "
+                  << (system_->isAssemblyDistributed()
+                          ? "assembly distributed (" +
+                            std::to_string(system_->numLocalDevices()) + " local devices)"
+                          : "assembly replicated")
+                  << ", "
+                  << (system_->isSolveDistributed() ? "solve distributed" : "solve replicated")
+                  << "\n";
+    }
 
     std::vector<int> node_map;
     createNodeMap(node_map);
@@ -138,13 +150,13 @@ TransientResult TransientAnalysis::run(double tstart, double tstop, double tstep
     // Devices with an initial condition force the IC mode of the OP
     // (Xyce dcopFlag + ICGiven convention).
     bool any_ic = false;
-    for (const Device* d : circuit_.getDevices()) {
+    for (const auto& d : circuit_.getDevices()) {
         const DeviceType ty = d->getType();
         if (ty == DeviceType::CAPACITOR || ty == DeviceType::INDUCTOR) {
-            if (const auto* c = dynamic_cast<const class Capacitor*>(d)) {
+            if (const auto* c = dynamic_cast<const class Capacitor*>(d.get())) {
                 if (c->hasIC()) any_ic = true;
             }
-            if (const auto* i = dynamic_cast<const class Inductor*>(d)) {
+            if (const auto* i = dynamic_cast<const class Inductor*>(d.get())) {
                 if (i->hasIC()) any_ic = true;
             }
         }
@@ -208,6 +220,9 @@ TransientResult TransientAnalysis::run(double tstart, double tstop, double tstep
         if (dt <= 0.0) break;
 
         // ---- try the step (reduce dt on Newton failure or LTE reject) ----
+        // Snapshot the accepted point FIRST: retries restore exactly this
+        // state (previously restore ran on never-saved snapshots).
+        system_->saveAcceptedState();
         double ratio = 1.0;
         bool accepted_step = false;
         for (int attempt = 0; attempt < 20; ++attempt) {
@@ -283,7 +298,12 @@ TransientResult TransientAnalysis::run(double tstart, double tstop, double tstep
     result.message = "Transient analysis completed successfully";
 
     if (verbose_) {
+        const auto& st = system_->solveStats();
         std::cout << "Completed " << step << " steps in " << result.total_time << " s\n";
+        std::cout << "Linear systems: " << st.linearSolves
+                  << " (Krylov iters: " << st.krylovIterations
+                  << ", direct fallbacks: " << st.directFallbacks
+                  << ", distributed solves: " << st.distributedSolves << ")\n";
     }
     return result;
 }
