@@ -228,6 +228,14 @@ private:
     void limitedVoltages(const DaeSolution& x, bool allow_limiting) const;
 
     /**
+     * @brief Copies the BSIM4 device evaluation into this wrapper's
+     *        members so storeState/getCurrent/getPower/refreshOutputs and
+     *        the limiting vote all work unchanged (single source of truth
+     *        stays the device; this is just a pull, no second evaluation).
+     */
+    void pullBSIM4() const;
+
+    /**
      * @brief Evaluates channel + bulk + charge at the (already limited)
      *        N-oriented voltages; fills currents, charges and ef_/eq_.
      */

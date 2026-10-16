@@ -97,6 +97,49 @@ void MosfetBSIM4Device::limitedVoltages(const DaeSolution& x,
     vbs_lim_ = vbs;
 }
 
+void MosfetBSIM4Device::beginSolve(bool initial_solve) {
+    if (initial_solve) {
+        // Start from the most linear point of each junction (same Xyce
+        // initJctFlag_ behaviour as Mosfet::beginSolve/Bjt::beginSolve).
+        vbs_prev_ = thermal_ ? thermal_->vcrit : 0.5;
+        vbd_prev_ = 0.0;
+        vgs_prev_ = 0.0;
+        vds_prev_ = 0.0;
+        first_solve_ = true;
+    }
+}
+
+void MosfetBSIM4Device::resetHistory(double vgs_raw, double vds_raw,
+                                     double vbs_raw) {
+    limiting_active_ = false;
+    vbs_prev_ = vbs_raw;
+    vbd_prev_ = vbs_raw - vds_raw;
+    vgs_prev_ = vgs_raw;
+    vds_prev_ = vds_raw;
+}
+
+void MosfetBSIM4Device::applySolutionLimit(std::vector<double>& x,
+                                           int rd, int rg, int rs, int rb,
+                                           int p) const {
+    if (!limiting_active_) return;
+
+    // Gate-anchored write-back (mirrors Mosfet::applySolutionLimit): the
+    // gate is the control terminal, drain/source/bulk carry the excursion.
+    const double vg = (rg >= 0) ? x[rg] : 0.0;
+    if (rs >= 0) x[rs] = vg - p * vgs_lim_;
+    const double vs = (rs >= 0) ? x[rs] : 0.0;
+    if (rd >= 0) x[rd] = vs + p * vds_lim_;
+    if (rb >= 0) x[rb] = vs + p * vbs_lim_;
+}
+
+void MosfetBSIM4Device::commitLimited() {
+    vbs_prev_ = vbs_lim_;
+    vbd_prev_ = vbs_lim_ - vds_lim_;
+    vgs_prev_ = vgs_lim_;
+    vds_prev_ = vds_lim_;
+    first_solve_ = false;
+}
+
 void MosfetBSIM4Device::evaluate(double vgs, double vds, double vbs) {
     const MosfetBSIM4Thermal& t = *thermal_;
     const double mult = AREA_;

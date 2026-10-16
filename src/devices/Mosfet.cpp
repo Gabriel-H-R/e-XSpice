@@ -155,6 +155,19 @@ void Mosfet::registerJacobianPattern(std::vector<int>& rows,
 }
 
 void Mosfet::beginSolve(bool initial_solve) {
+    // BSIM4 path: the level-1 thermal_ pointer is null for BSIM4 cards
+    // (it would segfault below) — the device owns its own history.
+    if (bsim4Device_) {
+        bsim4Device_->beginSolve(initial_solve);
+        if (initial_solve) {
+            vbs_prev_ = 0.5;
+            vbd_prev_ = 0.0;
+            vgs_prev_ = 0.0;
+            vds_prev_ = 0.0;
+            first_solve_ = true;
+        }
+        return;
+    }
     if (initial_solve) {
         vbs_prev_ = thermal_->vcrit;
         vbd_prev_ = 0.0;
@@ -404,20 +417,34 @@ void Mosfet::evaluate(double vgs, double vds, double vbs) const {
 // Loaders
 // ===============================================================
 
+void Mosfet::pullBSIM4() const {
+    id_ = bsim4Device_->getDrainCurrent();
+    is_ = bsim4Device_->getSourceCurrent();
+    ib_ = bsim4Device_->getBulkCurrent();
+    gm_ = bsim4Device_->getGm();
+    qg_ = bsim4Device_->getChargeG();
+    qd_ = bsim4Device_->getChargeD();
+    qb_ = bsim4Device_->getChargeB();
+    vth_cached_ = bsim4Device_->getVth();
+    saturated_ = bsim4Device_->inSaturation();
+    limiting_active_ = bsim4Device_->limitingActive();
+}
+
 void Mosfet::loadF(const DaeSolution& x, double time,
                    std::vector<double>& F) const {
     (void)time;
-    // BSIM4 level-2 path: device-agnostic evaluation via BjtDevice
+    // BSIM4 level-2 path: evaluate in the device (its own limited
+    // voltages), then pull the results into this wrapper's members.
     if (bsim4Device_) {
         bsim4Device_->limitedVoltages(x, rowOf(nodes_[0]), rowOf(nodes_[1]),
                                     rowOf(nodes_[2]), rowOf(nodes_[3]),
                                     true);
-        bsim4Device_->evaluate(vgs_lim_, vds_lim_, vbs_lim_);
+        bsim4Device_->evaluate(bsim4Device_->vgsLim(),
+                               bsim4Device_->vdsLim(),
+                               bsim4Device_->vbsLim());
         bsim4Device_->loadF(F);
-        vbs_prev_ = vbs_lim_;
-        vbd_prev_ = vbs_lim_ - vds_lim_;
-        vgs_prev_ = vgs_lim_;
-        vds_prev_ = vds_lim_;
+        pullBSIM4();
+        bsim4Device_->commitLimited();
         first_solve_ = false;
         return;
     }
@@ -453,6 +480,12 @@ void Mosfet::loadF(const DaeSolution& x, double time,
 }
 
 void Mosfet::applySolutionLimit(std::vector<double>& x) const {
+    // BSIM4 path: the device owns the limited voltages and history.
+    if (bsim4Device_) {
+        bsim4Device_->applySolutionLimit(x, rowOf(nodes_[0]), rowOf(nodes_[1]),
+                                         rowOf(nodes_[2]), rowOf(nodes_[3]), p_);
+        return;
+    }
     if (!limiting_active_) return;
 
     // Rebuild the unknowns from the LIMITED controlling voltages, anchored
@@ -480,12 +513,12 @@ void Mosfet::loadQ(const DaeSolution& x, double time,
         bsim4Device_->limitedVoltages(x, rowOf(nodes_[0]), rowOf(nodes_[1]),
                                     rowOf(nodes_[2]), rowOf(nodes_[3]),
                                     true);
-        bsim4Device_->evaluate(vgs_lim_, vds_lim_, vbs_lim_);
+        bsim4Device_->evaluate(bsim4Device_->vgsLim(),
+                               bsim4Device_->vdsLim(),
+                               bsim4Device_->vbsLim());
         bsim4Device_->loadQ(Q);
-        vbs_prev_ = vbs_lim_;
-        vbd_prev_ = vbs_lim_ - vds_lim_;
-        vgs_prev_ = vgs_lim_;
-        vds_prev_ = vds_lim_;
+        pullBSIM4();
+        bsim4Device_->commitLimited();
         first_solve_ = false;
         return;
     }
@@ -526,12 +559,15 @@ void Mosfet::loadJacobianQ(DaeMatrix& J, const DaeSolution& x,
 }
 
 void Mosfet::storeState(const DaeSolution& x, StateStore& store) const {
-    // BSIM4 level-2 path
+    // BSIM4 level-2 path (pull fills qg_/qd_/qb_ for the lines below).
     if (bsim4Device_) {
         bsim4Device_->limitedVoltages(x, rowOf(nodes_[0]), rowOf(nodes_[1]),
                                     rowOf(nodes_[2]), rowOf(nodes_[3]),
                                     true);
-        bsim4Device_->evaluate(vgs_lim_, vds_lim_, vbs_lim_);
+        bsim4Device_->evaluate(bsim4Device_->vgsLim(),
+                               bsim4Device_->vdsLim(),
+                               bsim4Device_->vbsLim());
+        pullBSIM4();
         const double q[3] = {qg_, qd_, qb_};
         store.setDeviceQ(state_index_, q, 3);
         return;
@@ -591,15 +627,18 @@ void Mosfet::loadChargeHistory(const StateStore& store, double q_coeff,
 
 void Mosfet::refreshOutputs(const DaeSolution& x, double time) const {
     (void)time;
-    // BSIM4 level-2 path
+    // BSIM4 level-2 path (no limiting on the converged point).
     if (bsim4Device_) {
         bsim4Device_->limitedVoltages(x, rowOf(nodes_[0]), rowOf(nodes_[1]),
                                     rowOf(nodes_[2]), rowOf(nodes_[3]),
                                     false);
-        bsim4Device_->evaluate(vgs_lim_, vds_lim_, vbs_lim_);
-        vgs_cached_ = p_ * vgs_lim_;
-        vds_cached_ = p_ * vds_lim_;
-        vbs_cached_ = p_ * vbs_lim_;
+        bsim4Device_->evaluate(bsim4Device_->vgsLim(),
+                               bsim4Device_->vdsLim(),
+                               bsim4Device_->vbsLim());
+        pullBSIM4();
+        vgs_cached_ = p_ * bsim4Device_->vgsLim();
+        vds_cached_ = p_ * bsim4Device_->vdsLim();
+        vbs_cached_ = p_ * bsim4Device_->vbsLim();
         return;
     }
 
@@ -627,6 +666,7 @@ void Mosfet::refreshOutputs(const DaeSolution& x, double time) const {
 }
 
 bool Mosfet::acceptSolution() const {
+    if (bsim4Device_) return bsim4Device_->acceptSolution();
     return !limiting_active_;
 }
 
@@ -646,9 +686,17 @@ void Mosfet::resetIterationState(const DaeSolution& x) {
     vbd_prev_ = vbs_prev_ - vds;
     vgs_prev_ = p_ * (vg - vs);
     vds_prev_ = vds;
+    if (bsim4Device_) {
+        bsim4Device_->resetHistory(vgs_prev_, vds_prev_, vbs_prev_);
+    }
 }
 
 void Mosfet::confirmAccept() {
+    if (bsim4Device_) {
+        bsim4Device_->confirmAccept();
+        limiting_active_ = false;
+        return;
+    }
     limiting_active_ = false;
 }
 

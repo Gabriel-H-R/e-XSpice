@@ -79,6 +79,40 @@ public:
                          int rd, int rg, int rs, int rb,
                          bool allow_limiting);
 
+    /**
+     * @brief Resets limiter history at the start of a solve (mirrors
+     *        Mosfet::beginSolve/Bjt::beginSolve Xyce initJctFlag behaviour).
+     */
+    void beginSolve(bool initial_solve);
+
+    /**
+     * @brief Re-anchors limiter history to raw voltages (called by the
+     *        wrapper's resetIterationState after a rejected step restore).
+     */
+    void resetHistory(double vgs_raw, double vds_raw, double vbs_raw);
+
+    /**
+     * @brief Gate-anchored write-back of the limited voltages into x
+     *        (mirrors Mosfet::applySolutionLimit).
+     */
+    void applySolutionLimit(std::vector<double>& x,
+                            int rd, int rg, int rs, int rb, int p) const;
+
+    /**
+     * @brief Advances limiter history after an evaluation (mirrors the
+     *        vbs_prev_/vgs_prev_ updates of the level-1 loaders) and
+     *        clears the first-solve flag so later iterations can limit.
+     */
+    void commitLimited();
+
+    bool acceptSolution() const { return !limiting_active_; }
+    void confirmAccept() { limiting_active_ = false; }
+
+    double vgsLim() const { return vgs_lim_; }
+    double vdsLim() const { return vds_lim_; }
+    double vbsLim() const { return vbs_lim_; }
+    bool limitingActive() const { return limiting_active_; }
+
     // ---------------------------------------------------------------
     // Loaders — called by Mosfet::loadF/loadQ/loadJacobianF/loadJacobianQ
     // ---------------------------------------------------------------
@@ -97,6 +131,10 @@ public:
     double getBulkCurrent() const { return ib_; }
     double getGateCurrent() const { return 0.0; }
     double getVth() const { return vth_cached_; }
+    double getGm() const { return gm_; }
+    double getChargeG() const { return qg_; }
+    double getChargeD() const { return qd_; }
+    double getChargeB() const { return qb_; }
     bool inSaturation() const { return saturated_; }
 
 private:
