@@ -8,6 +8,8 @@
 #include "../core_models/DiodeModel.h"
 #include "../core_models/PassiveModels.h"
 #include "../core_models/BjtModel.h"
+#include "../core_models/MosfetModel.h"
+#include "../core_models/MosfetBSIM4Model.h"
 
 #include <cctype>
 #include <stdexcept>
@@ -16,16 +18,45 @@ namespace e_XSpice {
 
 ModelRegistry::ModelRegistry() {
     // Built-in model factories (Xyce-style startup registration).
-    // Custom physics (MOSFET, JFET, ...) registers here at runtime.
-    registerModelType("D", &DiodeModel::fromCard);
-    registerModelType("R", &ResistorModel::fromCard);
-    registerModelType("C", &CapacitorModel::fromCard);
-    registerModelType("L", &InductorModel::fromCard);
-    registerModelType("NPN", [](const std::string& n, const ParamMap& p) {
-        return BjtModel::fromCard(n, p, false);
+    // A new model = one subclass (with its parameter table) + one line
+    // here. Factories only construct defaults; the registry fills card
+    // values generically, so factories never parse and never change when
+    // parameters are added.
+    registerModelType("D", [](const std::string& n) {
+        return make_rcp<DiodeModel>(n);
     });
-    registerModelType("PNP", [](const std::string& n, const ParamMap& p) {
-        return BjtModel::fromCard(n, p, true);
+    registerModelType("R", [](const std::string& n) {
+        return make_rcp<ResistorModel>(n);
+    });
+    registerModelType("C", [](const std::string& n) {
+        return make_rcp<CapacitorModel>(n);
+    });
+    registerModelType("L", [](const std::string& n) {
+        return make_rcp<InductorModel>(n);
+    });
+    registerModelType("NPN", [](const std::string& n) {
+        return make_rcp<BjtModel>(n, false);
+    });
+    registerModelType("PNP", [](const std::string& n) {
+        return make_rcp<BjtModel>(n, true);
+    });
+    registerModelType("NMOS", [](const std::string& n) {
+        return make_rcp<MosfetModel>(n, true);
+    });
+    registerModelType("PMOS", [](const std::string& n) {
+        return make_rcp<MosfetModel>(n, false);
+    });
+    registerModelType("NMOS2", [](const std::string& n) {
+        return make_rcp<MosfetBSIM4Model>(n, true);
+    });
+    registerModelType("PMOS2", [](const std::string& n) {
+        return make_rcp<MosfetBSIM4Model>(n, false);
+    });
+    registerModelType("NPN2", [](const std::string& n) {
+        return make_rcp<BjtModel>(n, false);
+    });
+    registerModelType("PNP2", [](const std::string& n) {
+        return make_rcp<BjtModel>(n, true);
     });
 }
 
@@ -46,6 +77,22 @@ bool ModelRegistry::hasModelType(const std::string& type) const {
     return factories_.find(upper(type)) != factories_.end();
 }
 
+std::vector<std::string> ModelRegistry::registeredTypes() const {
+    std::vector<std::string> types;
+    types.reserve(factories_.size());
+    for (const auto& kv : factories_) types.push_back(kv.first);
+    return types;   // std::map order = sorted
+}
+
+static std::string joinNames(const std::vector<std::string>& names) {
+    std::string out;
+    for (const auto& n : names) {
+        if (!out.empty()) out += " ";
+        out += n;
+    }
+    return out;
+}
+
 RCP<DeviceModel> ModelRegistry::createModel(const ModelCard& card) {
     const std::string type = upper(card.type);
     const std::string name = upper(card.name);
@@ -57,13 +104,27 @@ RCP<DeviceModel> ModelRegistry::createModel(const ModelCard& card) {
     const auto fit = factories_.find(type);
     if (fit == factories_.end()) {
         throw std::invalid_argument("Unknown .MODEL type '" + card.type +
-                                    "' (no factory registered for '" + type + "')");
+                                    "' (registered types: " +
+                                    joinNames(registeredTypes()) + ")");
     }
     if (models_.find(name) != models_.end()) {
         throw std::invalid_argument("Duplicate .MODEL '" + name + "'");
     }
 
-    RCP<DeviceModel> model = fit->second(name, card.params);
+    RCP<DeviceModel> model = fit->second(name);
+
+    // Generic parameter fill from the declared table (aliases, °C keys,
+    // canonical-wins precedence). Unknown keys fail with the valid list —
+    // a typo'd parameter must never silently become a default.
+    const std::vector<std::string> unknown =
+        model->applyCardParams(card.params);
+    if (!unknown.empty()) {
+        throw std::invalid_argument(".MODEL '" + name + "' (" + type +
+                                    "): unknown parameter(s) '" +
+                                    joinNames(unknown) +
+                                    "' (valid parameters: " +
+                                    model->validParamList() + ")");
+    }
 
     std::string message;
     if (!model->processParams(message)) {

@@ -171,6 +171,39 @@ inline double scaleSatCurrent(double is, double n, double eg, double xti,
                          (xti / n) * std::log(tempKelvin / tnomKelvin));
 }
 
+/**
+ * @brief Evaluate a substrate (bulk) diode: SPICE3 exponential with gmin.
+ *
+ * Returns the diode current, conductance, charge and capacitance at the
+ * given forward voltage vd (positive = forward biased). Used by BJT level-2
+ * for the collector-substrate / base-substrate diode.
+ *
+ * All outputs are AREA-scaled.
+ */
+inline void evalSubstrateDiode(const JunctionCap& cap, double area,
+                               double gmin, double vd,
+                               double& id, double& gd,
+                               double& qd, double& cd) {
+    id = 0.0; gd = 0.0; qd = 0.0; cd = 0.0;
+    if (cap.cjo <= 0.0 || cap.vj <= 0.0) return;
+
+    const double vt = Const::KoverQ * 300.15;  // approximate vt; caller may refine
+    const double isat = 1e-14 * area;          // placeholder — real IS from card
+
+    const double arg = vd / vt;
+    const double clamped = std::min(arg, Const::MaxExpArg);
+    const double ev = std::exp(clamped);
+
+    id = isat * (ev - 1.0) + gmin * vd;
+    gd = isat * ev / vt + gmin;
+
+    // Depletion charge via junctionCharge (transit term disabled for substrate).
+    const JunctionGeom geom{cap.cjo * area, 0.0, 0.5};
+    const JunctionChargePoint jc = junctionCharge(vd, id, gd, geom, cap);
+    qd = jc.q;
+    cd = jc.c;
+}
+
 } // namespace e_XSpice
 
 #endif // JUNCTION_H

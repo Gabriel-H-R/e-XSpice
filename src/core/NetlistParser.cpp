@@ -13,7 +13,9 @@
 #include "../devices/Diode.h"
 #include "../devices/SourceWaveform.h"
 #include "../devices/Bjt.h"
+#include "../devices/Mosfet.h"
 #include "../models/core_models/PassiveModels.h"
+#include "../models/core_models/MosfetBSIM4Model.h"
 
 #include <iostream>
 #include <fstream>
@@ -60,6 +62,9 @@ NetlistParser::NetlistParser()
     };
     creators_['Q'] = [this](const std::vector<std::string>& t, Circuit& c) {
         return parseBjt(t, c);
+    };
+    creators_['M'] = [this](const std::vector<std::string>& t, Circuit& c) {
+        return parseMosfet(t, c);
     };
 }
 
@@ -390,23 +395,9 @@ bool NetlistParser::parseDiode(const std::vector<std::string>& tokens, Circuit& 
     }
 
     DiodeInstanceParams inst;
-    for (size_t i = 4; i < tokens.size(); ++i) {
-        const std::string t = toUpper(tokens[i]);
-        if (t.find("AREA=") == 0) {
-            try {
-                inst.AREA = parseValue(tokens[i].substr(5));
-            } catch (const std::exception& e) {
-                setError(std::string("Diode AREA: ") + e.what());
-                return false;
-            }
-        } else if (t.find("M=") == 0) {
-            try {
-                inst.M = parseValue(tokens[i].substr(2));
-            } catch (const std::exception& e) {
-                setError(std::string("Diode M: ") + e.what());
-                return false;
-            }
-        }
+    if (!parseInstanceTail(tokens, 4, inst, DiodeInstanceParams::paramTable(),
+                           "Diode")) {
+        return false;
     }
 
     Node* n_anode = getOrCreateNode(circuit, tokens[1], node_anode);
@@ -429,15 +420,41 @@ bool NetlistParser::parseDiode(const std::vector<std::string>& tokens, Circuit& 
 }
 
 bool NetlistParser::parseBjt(const std::vector<std::string>& tokens, Circuit& circuit) {
-    // Q<name> <collector> <base> <emitter> <model> [AREA=<a>] [TEMP=<degC>]
+    // Q<name> <collector> <base> <emitter> [substrate] <model>
+    //         [AREA=<a>] [TEMP=<degC>]
+    // The 4-node form carries the substrate terminal (needs LEVEL=2).
     if (tokens.size() < 5) {
-        setError("Transistor requires: Q<name> <C> <B> <E> <model> "
+        setError("Transistor requires: Q<name> <C> <B> <E> [S] <model> "
                  "[AREA=<a>] [TEMP=<c>]");
         return false;
     }
 
     std::string name = tokens[0];
-    const std::string& model_name = tokens[4];   // after C B E
+
+    // Disambiguate the 3-node vs 4-node (substrate) form: scan for the model
+    // as the first token that names a registered card; the node tokens
+    // before it are the terminals (3 or 4). When the card is missing (error
+    // path) fall back to the classic slots so the message names the model.
+    size_t model_at = 0;
+    {
+        for (size_t i = 1; i < tokens.size(); ++i) {
+            if (tokens[i].find('=') != std::string::npos) break;
+            if (models_.find(tokens[i])) { model_at = i; break; }
+            if (i > 5) break;
+        }
+        if (model_at == 0) {
+            model_at = (tokens.size() >= 6 &&
+                        tokens[5].find('=') == std::string::npos) ? 5 : 4;
+        }
+        const size_t n_nodes = model_at - 1;
+        if (n_nodes != 3 && n_nodes != 4) {
+            setError("Transistor requires: Q<name> <C> <B> <E> [S] <model> "
+                     "[AREA=<a>] [TEMP=<c>]");
+            return false;
+        }
+    }
+    const bool has_sub = (model_at - 1 == 4);
+    const std::string& model_name = tokens[model_at];
 
     // The device is agnostic to the card contents: untyped lookup first
     // (for the "missing .MODEL" message), then the checked downcast.
@@ -454,33 +471,22 @@ bool NetlistParser::parseBjt(const std::vector<std::string>& tokens, Circuit& ci
     }
 
     BjtInstanceParams inst;
-    for (size_t i = 5; i < tokens.size(); ++i) {
-        const std::string t = toUpper(tokens[i]);
-        if (t.find("AREA=") == 0) {
-            try {
-                inst.AREA = parseValue(tokens[i].substr(5));
-            } catch (const std::exception& e) {
-                setError(std::string("Transistor AREA: ") + e.what());
-                return false;
-            }
-        } else if (t.find("TEMP=") == 0) {
-            try {
-                inst.TEMP = parseValue(tokens[i].substr(5)) + 273.15;
-            } catch (const std::exception& e) {
-                setError(std::string("Transistor TEMP: ") + e.what());
-                return false;
-            }
-            inst.TEMPGiven = true;
-        }
+    if (!parseInstanceTail(tokens, model_at + 1, inst,
+                           BjtInstanceParams::paramTable(), "Transistor")) {
+        return false;
     }
 
     Node* n_collector = getOrCreateNode(circuit, tokens[1], getNodeId(tokens[1]));
     Node* n_base      = getOrCreateNode(circuit, tokens[2], getNodeId(tokens[2]));
     Node* n_emitter   = getOrCreateNode(circuit, tokens[3], getNodeId(tokens[3]));
+    Node* n_sub = nullptr;
+    if (has_sub) {
+        n_sub = getOrCreateNode(circuit, tokens[4], getNodeId(tokens[4]));
+    }
 
     try {
         circuit.addDevice(make_rcp<Bjt>(name, n_collector, n_base, n_emitter,
-                                        std::move(model), inst));
+                                        std::move(model), inst, n_sub));
     } catch (const std::exception& e) {
         setError(e.what());
         return false;
@@ -490,6 +496,86 @@ bool NetlistParser::parseBjt(const std::vector<std::string>& tokens, Circuit& ci
         std::cout << "  " << name << ": c=" << tokens[1] << " b=" << tokens[2]
                   << " e=" << tokens[3] << " model " << model_name
                   << (inst.AREA != 1.0 ? " (AREA)" : "") << std::endl;
+    }
+
+    return true;
+}
+
+bool NetlistParser::parseMosfet(const std::vector<std::string>& tokens,
+                                Circuit& circuit) {
+    // M<name> <drain> <gate> <source> <bulk> <model>
+    //         [W=<w>] [L=<l>] [M=<m>] [AD=<a>] [AS=<a>] [TEMP=<degC>]
+    //         [LEVEL=2]  -> BSIM4 model (NMOS2/PMOS2 card)
+    if (tokens.size() < 6) {
+        setError("MOSFET requires: M<name> <D> <G> <S> <B> <model> "
+                 "[W=<w>] [L=<l>] [M=<m>]");
+        return false;
+    }
+
+    std::string name = tokens[0];
+    std::string model_name = tokens[5];
+
+    // Detect LEVEL=2 -> BSIM4 model. The card must be .MODEL X NMOS2/PMOS2.
+    bool is_bsim4 = false;
+    for (size_t i = 6; i < tokens.size(); ++i) {
+        const std::string& t = tokens[i];
+        if (t.find("LEVEL=") == 0) {
+            try {
+                int level = std::stoi(t.substr(6));
+                if (level == 2) {
+                    is_bsim4 = true;
+                    if (model_name == "NMOS") model_name = "NMOS2";
+                    else if (model_name == "PMOS") model_name = "PMOS2";
+                }
+            } catch (...) {
+                // fall through: invalid LEVEL value -> error below
+            }
+            break;
+        }
+    }
+
+    RCP<const MosfetModel> model = models_.findAs<MosfetModel>(model_name);
+    RCP<const MosfetBSIM4Model> bsim_model = models_.findAs<MosfetBSIM4Model>(model_name);
+    if (!model && !bsim_model) {
+        if (models_.find(model_name)) {
+            setError("Model '" + model_name + "' is not a MOSFET model "
+                     "(expected .MODEL " + model_name + " NMOS|PMOS|NMOS2|PMOS2)");
+        } else {
+            setError("Unknown MOSFET model '" + model_name +
+                     "' (missing .MODEL card)");
+        }
+        return false;
+    }
+
+    MosfetInstanceParams inst;
+    if (!parseInstanceTail(tokens, 6, inst, MosfetInstanceParams::paramTable(),
+                           "MOSFET")) {
+        return false;
+    }
+
+    Node* n_drain  = getOrCreateNode(circuit, tokens[1], getNodeId(tokens[1]));
+    Node* n_gate   = getOrCreateNode(circuit, tokens[2], getNodeId(tokens[2]));
+    Node* n_source = getOrCreateNode(circuit, tokens[3], getNodeId(tokens[3]));
+    Node* n_bulk   = getOrCreateNode(circuit, tokens[4], getNodeId(tokens[4]));
+
+    try {
+        if (bsim_model) {
+            circuit.addDevice(make_rcp<Mosfet>(name, n_drain, n_gate, n_source,
+                                               n_bulk, bsim_model, inst));
+        } else {
+            circuit.addDevice(make_rcp<Mosfet>(name, n_drain, n_gate, n_source,
+                                               n_bulk, std::move(model), inst));
+        }
+    } catch (const std::exception& e) {
+        setError(e.what());
+        return false;
+    }
+
+    if (verbose_) {
+        std::cout << "  " << name << ": d=" << tokens[1] << " g=" << tokens[2]
+                  << " s=" << tokens[3] << " b=" << tokens[4]
+                  << " model " << model_name
+                  << (is_bsim4 ? " [BSIM4]" : "") << std::endl;
     }
 
     return true;
@@ -509,7 +595,13 @@ bool NetlistParser::parseModel(const std::vector<std::string>& tokens) {
     const std::string type = tokens[2];
 
     if (!models_.hasModelType(type)) {
-        setError("Unknown .MODEL type '" + type + "' (no factory registered)");
+        std::string valid;
+        for (const auto& t : models_.registeredTypes()) {
+            if (!valid.empty()) valid += " ";
+            valid += t;
+        }
+        setError("Unknown .MODEL type '" + type + "' (registered types: " +
+                 valid + ")");
         return false;
     }
 
@@ -644,6 +736,7 @@ bool NetlistParser::parseCommand(const std::vector<std::string>& tokens) {
     
     if (cmd == ".OP") {
         analysis_params_.type = AnalysisType::DC_OP;
+        analysis_params_.want_op = true;
         if (verbose_) std::cout << "  Analysis: DC Operating Point" << std::endl;
     } else if (cmd == ".TRAN") {
         if (tokens.size() < 3) {
@@ -651,6 +744,7 @@ bool NetlistParser::parseCommand(const std::vector<std::string>& tokens) {
             return false;
         }
         analysis_params_.type = AnalysisType::TRANSIENT;
+        analysis_params_.want_tran = true;
         analysis_params_.tran_tstep = parseValue(tokens[1]);
         analysis_params_.tran_tstop = parseValue(tokens[2]);
         if (tokens.size() > 3) {

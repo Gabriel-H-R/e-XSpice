@@ -69,6 +69,7 @@ endif()
 include_directories(
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/models/core_models
     ${CMAKE_SOURCE_DIR}/libs/symbolic
 )
 

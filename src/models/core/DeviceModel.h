@@ -32,7 +32,11 @@
 #define DEVICE_MODEL_H
 
 #include "e_XSpice_rcp.h"   // RCP<T>: intrusive refcounted ownership
+#include "ModelParams.h"     // declarative parameter tables (addPar-style)
+#include "ModelCard.h"       // ParamMap (card key=value pairs)
+#include "DeviceConstants.h" // Const::CtoK (°C → K for TNOM/TEMP keys)
 #include <string>
+#include <vector>
 
 namespace e_XSpice {
 
@@ -76,8 +80,73 @@ public:
      */
     virtual void updateTemperature(double tempKelvin) { (void)tempKelvin; }
 
+    /**
+     * @brief Returns true if this model card is a BSIM4 level-2 card.
+     *        Base class returns false; MosfetBSIM4Model overrides to true.
+     */
+    virtual bool isBSIM4() const { return false; }
+
+    // ---------------------------------------------------------------
+    // Declarative parameters (see ModelParams.h)
+    // ---------------------------------------------------------------
+
+    /**
+     * @brief Looks a card key up in the declared table (canonical+aliases).
+     */
+    bool hasParam(const std::string& key) const {
+        for (const auto& d : params_) {
+            if (d.name == key) return true;
+        }
+        return false;
+    }
+
+    /**
+     * @brief Read access to the declared table (introspection / docs).
+     */
+    const std::vector<ModelParamDesc>& paramTable() const { return params_; }
+
+    /**
+     * @brief Fills every declared parameter present in `params`.
+     *        Aliases apply first so the canonical spelling always wins.
+     *        Celsius keys get the °C→K offset; absent keys keep defaults.
+     * @return card keys with no table entry (unknown/typo), in card order
+     */
+    std::vector<std::string> applyCardParams(const ParamMap& params) {
+        std::vector<std::string> unknown =
+            applyParamTable(*this, params_, params);
+        for (const auto& kv : params) {
+            if (hasParam(kv.first)) onParamGiven(kv.first);
+        }
+        return unknown;
+    }
+
+    /**
+     * @brief Human-readable parameter list (canonical first, then aliases).
+     *        Used in unknown-parameter errors so a typo shows what's legal.
+     */
+    std::string validParamList() const {
+        return e_XSpice::validParamList(params_);
+    }
+
 protected:
+    /**
+     * @brief Declares the card parameter table (called once, subclass ctor).
+     */
+    void declareParams(std::vector<ModelParamDesc> table) {
+        params_ = std::move(table);
+    }
+
+    /**
+     * @brief Fires once per APPLIED card key (canonical or alias spelling).
+     *        Backs `given` side effects (e.g. DiodeModel sets BVGiven when
+     *        "BV" or "VB" arrives) without exposing the raw card.
+     */
+    virtual void onParamGiven(const std::string& key) { (void)key; }
+
     std::string name_;
+
+private:
+    std::vector<ModelParamDesc> params_;
 };
 
 } // namespace e_XSpice

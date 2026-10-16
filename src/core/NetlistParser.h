@@ -9,6 +9,10 @@
  * - Capacitors: C<name> <n+> <n-> <value> [IC=<initial_value>]
  * - Inductors: L<name> <n+> <n-> <value> [IC=<initial_value>]
  * - Diodes: D<name> <anode> <cathode> <model> [AREA=<a>] [M=<m>]
+ * - Transistors: Q<name> <C> <B> <E> [S] <model> [AREA=<a>] [TEMP=<c>]
+ *   (4 nodes = substrate terminal, needs a LEVEL=2 BJT card)
+ * - MOSFETs: M<name> <D> <G> <S> <B> <model>
+ *   [W=<w>] [L=<l>] [M=<m>] [AD=<a>] [AS=<a>] [TEMP=<c>]
  * - Sources: V/I<name> <n+> <n-> DC|AC|PULSE|SIN|PWL ...
  * - Models: .MODEL <name> <TYPE> (P1=V1 P2=V2 ...)  (any registered TYPE)
  * - Commands: .OP, .TRAN, .AC, .END
@@ -60,6 +64,12 @@ enum class AnalysisType {
  */
 struct AnalysisParameters {
     AnalysisType type = AnalysisType::NONE;
+
+    // Explicit requests, independent of order: a netlist may carry both
+    // .OP and .TRAN (each card sets its own flag; `type` keeps the last
+    // one for backward compatibility).
+    bool want_op = false;     // .OP seen
+    bool want_tran = false;   // .TRAN seen
     
     // Transient analysis
     double tran_tstep = 0.0;    // Time step
@@ -198,9 +208,16 @@ private:
     bool parseDiode(const std::vector<std::string>& tokens, Circuit& circuit);
 
     /**
-     * @brief Parses transistor: Q<name> <C> <B> <E> <model> [AREA=<a>] [TEMP=<c>]
+     * @brief Parses transistor: Q<name> <C> <B> <E> [S] <model>
+     *        [AREA=<a>] [TEMP=<c>] (4 nodes need a LEVEL=2 card)
      */
     bool parseBjt(const std::vector<std::string>& tokens, Circuit& circuit);
+
+    /**
+     * @brief Parses MOSFET: M<name> <D> <G> <S> <B> <model>
+     *        [W=<w>] [L=<l>] [M=<m>] [AD=<a>] [AS=<a>] [TEMP=<c>]
+     */
+    bool parseMosfet(const std::vector<std::string>& tokens, Circuit& circuit);
     
     /**
      * @brief Parses commands (.OP, .TRAN, .AC, .MODEL, .END)
@@ -232,6 +249,51 @@ private:
      * Names "0", "GND", "gnd" map to 0 (ground)
      */
     int getNodeId(const std::string& node_name);                       // name → id
+
+    /**
+     * @brief Fills a per-instance option struct from trailing KEY=value
+     *        tokens, generically from the struct's own parameter table
+     *        (same machinery as model cards: aliases, °C keys, given-hooks,
+     *        unknown-key errors with the valid list). New instance options
+     *        never touch parser code — only the struct's table.
+     * @return false + setError() on malformed/unknown options
+     */
+    template <class O>
+    bool parseInstanceTail(const std::vector<std::string>& tokens,
+                           size_t from, O& inst,
+                           const std::vector<TypedParamDesc<O>>& table,
+                           const char* what) {
+        ParamMap opts;
+        for (size_t i = from; i < tokens.size(); ++i) {
+            const size_t eq = tokens[i].find('=');
+            if (eq == std::string::npos) {
+                setError(std::string(what) + ": expected KEY=value, got '" +
+                         tokens[i] + "'");
+                return false;
+            }
+            const std::string key = toUpper(tokens[i].substr(0, eq));
+            try {
+                opts[key] = parseValue(tokens[i].substr(eq + 1));
+            } catch (const std::exception& e) {
+                setError(std::string(what) + " option '" + key + "': " +
+                         e.what());
+                return false;
+            }
+        }
+        const std::vector<std::string> unknown =
+            applyParamTable(inst, table, opts);
+        if (!unknown.empty()) {
+            std::string list;
+            for (const auto& u : unknown) {
+                if (!list.empty()) list += " ";
+                list += u;
+            }
+            setError(std::string(what) + ": unknown option(s) '" + list +
+                     "' (valid options: " + validParamList(table) + ")");
+            return false;
+        }
+        return true;
+    }
     
     /**
      * @brief Returns the node object for an id, creating it when needed.
