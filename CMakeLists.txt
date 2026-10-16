@@ -167,6 +167,21 @@ target_link_libraries(e-XSpice
 
 
 # ============================================================
+# BSIM4 PHYSICS KERNEL
+# ============================================================
+# reference (default): pure-C++ subset, always builds, no extra headers.
+# berkeley: upstream src/models/bsim4/code (b4ld.c/b4temp.c) via the
+# adapter skeleton in src/models/external/. Requires SPICE3 shim headers
+# (spice.h, cktdefs.h, devdefs.h — absent), so OFF by default.
+
+option(EXSPICE_USE_BERKELEY_BSIM4 "Compile Berkeley BSIM4 C kernel (requires shim headers)" OFF)
+
+if(EXSPICE_USE_BERKELEY_BSIM4)
+    add_compile_definitions(EXSPICE_USE_BERKELEY_BSIM4)
+endif()
+
+
+# ============================================================
 # TESTS
 # ============================================================
 
@@ -191,5 +206,6 @@ message(STATUS "C++ Standard : C++${CMAKE_CXX_STANDARD}")
 message(STATUS "Build Type   : ${CMAKE_BUILD_TYPE}")
 message(STATUS "MPI          : ${MPI_FOUND}")
 message(STATUS "OpenMP       : ${OpenMP_FOUND}")
+message(STATUS "BSIM4 kernel : ${EXSPICE_USE_BERKELEY_BSIM4} (ON=Berkeley C, OFF=reference C++)")
 message(STATUS "============================================")
 message(STATUS "")

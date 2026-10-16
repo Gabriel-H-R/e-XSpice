@@ -60,16 +60,16 @@ Mosfet::Mosfet(const std::string& name,
     // evaluator. The MosfetModel (level-1) and MosfetBSIM4Model (level-2)
     // are separate classes; we cannot cast between them.
     if (model_->isBSIM4()) {
-        bjtModel_ = rcp_static_cast<const MosfetBSIM4Model>(model_);
-        bjtDevice_ = new MosfetBSIM4Device(bjtModel_,
+        bsim4Model_ = rcp_static_cast<const MosfetBSIM4Model>(model_);
+        bsim4Device_ = new MosfetBSIM4Device(bsim4Model_,
                                            inst_.W, inst_.L, inst_.M, inst_.M);
-        bjtDevice_->setPolarity(bjtModel_->isNmos() ? 1 : -1);
-        p_ = bjtModel_->isNmos() ? 1 : -1;
+        bsim4Device_->setPolarity(bsim4Model_->isNmos() ? 1 : -1);
+        p_ = bsim4Model_->isNmos() ? 1 : -1;
         if (inst_.TEMPGiven) {
-            ownThermalBSIM4_ = bjtModel_->computeThermal(inst_.TEMP + inst_.DTEMP);
-            bjtDevice_->setThermal(&ownThermalBSIM4_);
+            ownThermalBSIM4_ = bsim4Model_->computeThermal(inst_.TEMP + inst_.DTEMP);
+            bsim4Device_->setThermal(&ownThermalBSIM4_);
         } else {
-            bjtDevice_->setThermal(&bjtModel_->thermal());
+            bsim4Device_->setThermal(&bsim4Model_->thermal());
         }
     } else {
         p_ = level1Model()->isNmos() ? 1 : -1;
@@ -79,12 +79,12 @@ Mosfet::Mosfet(const std::string& name,
         if (inst_.TEMP <= 0.0) {
             throw std::invalid_argument("MOSFET TEMP must be positive (Kelvin)");
         }
-        if (!bjtModel_) {
+        if (!bsim4Model_) {
             ownThermal_ = level1Model()->computeThermal(inst_.TEMP + inst_.DTEMP);
             thermal_ = &ownThermal_;
         }
     } else {
-        if (!bjtModel_) {
+        if (!bsim4Model_) {
             thermal_ = &level1Model()->thermal();
         }
     }
@@ -92,7 +92,7 @@ Mosfet::Mosfet(const std::string& name,
     // Setup-time geometry (never recomputed in the loops).
     // BSIM4 level-2 computes its own geometry internally; level-1 needs
     // these precomputed values.
-    if (!bjtDevice_) {
+    if (!bsim4Device_) {
         leff_ = inst_.L - 2.0 * level1Model()->LD;
         if (leff_ <= 0.0) {
             throw std::invalid_argument("MOSFET Leff = L − 2·LD must be positive");
@@ -115,7 +115,7 @@ Mosfet::Mosfet(const std::string& name,
 }
 
 Mosfet::~Mosfet() {
-    delete bjtDevice_;
+    delete bsim4Device_;
 }
 
 RCP<Mosfet> Mosfet::makeNmos(const std::string& name, Node* drain,
@@ -408,12 +408,12 @@ void Mosfet::loadF(const DaeSolution& x, double time,
                    std::vector<double>& F) const {
     (void)time;
     // BSIM4 level-2 path: device-agnostic evaluation via BjtDevice
-    if (bjtDevice_) {
-        bjtDevice_->limitedVoltages(x, rowOf(nodes_[0]), rowOf(nodes_[1]),
+    if (bsim4Device_) {
+        bsim4Device_->limitedVoltages(x, rowOf(nodes_[0]), rowOf(nodes_[1]),
                                     rowOf(nodes_[2]), rowOf(nodes_[3]),
                                     true);
-        bjtDevice_->evaluate(vgs_lim_, vds_lim_, vbs_lim_);
-        bjtDevice_->loadF(F);
+        bsim4Device_->evaluate(vgs_lim_, vds_lim_, vbs_lim_);
+        bsim4Device_->loadF(F);
         vbs_prev_ = vbs_lim_;
         vbd_prev_ = vbs_lim_ - vds_lim_;
         vgs_prev_ = vgs_lim_;
@@ -476,12 +476,12 @@ void Mosfet::loadQ(const DaeSolution& x, double time,
                    std::vector<double>& Q) const {
     (void)time;
     // BSIM4 level-2 path
-    if (bjtDevice_) {
-        bjtDevice_->limitedVoltages(x, rowOf(nodes_[0]), rowOf(nodes_[1]),
+    if (bsim4Device_) {
+        bsim4Device_->limitedVoltages(x, rowOf(nodes_[0]), rowOf(nodes_[1]),
                                     rowOf(nodes_[2]), rowOf(nodes_[3]),
                                     true);
-        bjtDevice_->evaluate(vgs_lim_, vds_lim_, vbs_lim_);
-        bjtDevice_->loadQ(Q);
+        bsim4Device_->evaluate(vgs_lim_, vds_lim_, vbs_lim_);
+        bsim4Device_->loadQ(Q);
         vbs_prev_ = vbs_lim_;
         vbd_prev_ = vbs_lim_ - vds_lim_;
         vgs_prev_ = vgs_lim_;
@@ -507,8 +507,8 @@ void Mosfet::loadJacobianF(DaeMatrix& J, const DaeSolution& x,
                            double time) const {
     (void)x; (void)time;
     // BSIM4 level-2 path
-    if (bjtDevice_) {
-        bjtDevice_->loadJacobianF(J, jac_slots_);
+    if (bsim4Device_) {
+        bsim4Device_->loadJacobianF(J, jac_slots_);
         return;
     }
     for (int k = 0; k < 16; ++k) emit(J, k, ef_[k]);
@@ -518,8 +518,8 @@ void Mosfet::loadJacobianQ(DaeMatrix& J, const DaeSolution& x,
                            double time) const {
     (void)x; (void)time;
     // BSIM4 level-2 path
-    if (bjtDevice_) {
-        bjtDevice_->loadJacobianQ(J, jac_slots_);
+    if (bsim4Device_) {
+        bsim4Device_->loadJacobianQ(J, jac_slots_);
         return;
     }
     for (int k = 0; k < 16; ++k) emit(J, k, eq_[k]);
@@ -527,11 +527,11 @@ void Mosfet::loadJacobianQ(DaeMatrix& J, const DaeSolution& x,
 
 void Mosfet::storeState(const DaeSolution& x, StateStore& store) const {
     // BSIM4 level-2 path
-    if (bjtDevice_) {
-        bjtDevice_->limitedVoltages(x, rowOf(nodes_[0]), rowOf(nodes_[1]),
+    if (bsim4Device_) {
+        bsim4Device_->limitedVoltages(x, rowOf(nodes_[0]), rowOf(nodes_[1]),
                                     rowOf(nodes_[2]), rowOf(nodes_[3]),
                                     true);
-        bjtDevice_->evaluate(vgs_lim_, vds_lim_, vbs_lim_);
+        bsim4Device_->evaluate(vgs_lim_, vds_lim_, vbs_lim_);
         const double q[3] = {qg_, qd_, qb_};
         store.setDeviceQ(state_index_, q, 3);
         return;
@@ -549,7 +549,7 @@ void Mosfet::loadChargeHistory(const StateStore& store, double q_coeff,
     if (q_coeff == 0.0) return;
 
     // BSIM4 level-2 path
-    if (bjtDevice_) {
+    if (bsim4Device_) {
         const int rd = rowOf(nodes_[0]);
         const int rg = rowOf(nodes_[1]);
         const int rs = rowOf(nodes_[2]);
@@ -592,11 +592,11 @@ void Mosfet::loadChargeHistory(const StateStore& store, double q_coeff,
 void Mosfet::refreshOutputs(const DaeSolution& x, double time) const {
     (void)time;
     // BSIM4 level-2 path
-    if (bjtDevice_) {
-        bjtDevice_->limitedVoltages(x, rowOf(nodes_[0]), rowOf(nodes_[1]),
+    if (bsim4Device_) {
+        bsim4Device_->limitedVoltages(x, rowOf(nodes_[0]), rowOf(nodes_[1]),
                                     rowOf(nodes_[2]), rowOf(nodes_[3]),
                                     false);
-        bjtDevice_->evaluate(vgs_lim_, vds_lim_, vbs_lim_);
+        bsim4Device_->evaluate(vgs_lim_, vds_lim_, vbs_lim_);
         vgs_cached_ = p_ * vgs_lim_;
         vds_cached_ = p_ * vds_lim_;
         vbs_cached_ = p_ * vbs_lim_;

@@ -31,6 +31,7 @@
 #include "../../models/core/DeviceConstants.h"
 #include "MosfetBSIM4Model.h"
 #include "Junction.h"
+#include "../external/Bsim4Kernel.h"
 #include <cmath>
 
 namespace e_XSpice {
@@ -38,9 +39,9 @@ namespace e_XSpice {
 /**
  * @brief BSIM4 4.8.3 device evaluation (level 2).
  *
- * All voltages are N-oriented (positive for NMOS direction). The device
- * does NOT apply the polarity multiplier p — the caller (Mosfet) does that
- * when stamping, so this class is polarity-agnostic.
+ * DAE-facing shell: limiters, stamping and state live here. Physics lives
+ * behind IBsim4Kernel (reference subset by default; Berkeley C via the
+ * adapter skeleton when the shim is vendored). All voltages N-oriented.
  */
 class MosfetBSIM4Device : public RefCounted {
 public:
@@ -56,6 +57,7 @@ public:
     // Set by the Mosfet wrapper after construction.
     void setPolarity(int p) { p_ = p; }
     void setThermal(const MosfetBSIM4Thermal* t) { thermal_ = t; }
+    void setKernel(RCP<IBsim4Kernel> k) { kernel_ = std::move(k); }
 
     // ---------------------------------------------------------------
     // Evaluation
@@ -101,6 +103,7 @@ public:
 
 private:
     RCP<const MosfetBSIM4Model> model_;
+    RCP<IBsim4Kernel> kernel_;  // physics source (reference default)
     double W_ = 0.0, L_ = 0.0, M_ = 1.0, AREA_ = 1.0;
 
     // Polarity multiplier: +1 NMOS, −1 PMOS (set by Mosfet wrapper).

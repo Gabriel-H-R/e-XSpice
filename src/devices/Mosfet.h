@@ -152,7 +152,7 @@ public:
     const MosfetInstanceParams& instanceParams() const { return inst_; }
 
     /** @brief True when using a BSIM4 level-2 card. */
-    bool isBSIM4() const { return (bool)bjtModel_; }
+    bool isBSIM4() const { return (bool)bsim4Model_; }
 
     /** @brief Access the level-1 card when available (null when BSIM4). */
     RCP<const MosfetModel> level1Model() const {
@@ -168,8 +168,8 @@ private:
 
     // BSIM4 level-2 support: shared card + device evaluator (null when
     // LEVEL=1 / Shichman-Hodges).
-    RCP<const MosfetBSIM4Model> bjtModel_;
-    MosfetBSIM4Device* bjtDevice_ = nullptr;  // owned by this Mosfet
+    RCP<const MosfetBSIM4Model> bsim4Model_;
+    MosfetBSIM4Device* bsim4Device_ = nullptr;  // owned by this Mosfet
 
     const MosfetThermal* thermal_ = nullptr;
     MosfetThermal ownThermal_;
