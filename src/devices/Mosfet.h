@@ -156,8 +156,7 @@ public:
 
     /** @brief Access the level-1 card when available (null when BSIM4). */
     RCP<const MosfetModel> level1Model() const {
-        return RCP<const MosfetModel>(
-            static_cast<const MosfetModel*>(model_.get()));
+        return rcp_dynamic_cast<const MosfetModel>(model_);
     }
 
     static void setDebug(bool on) { debug_ = on; }

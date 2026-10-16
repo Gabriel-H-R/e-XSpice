@@ -32,6 +32,18 @@ target_link_libraries(test_models e-XSpice_lib)
 add_executable(test_bjt test_bjt.cpp)
 target_link_libraries(test_bjt e-XSpice_lib)
 
+# 8b. BJT level-2 (Gummel-Poon: qb, ISE/ISC, RB/RC/RE, substrate)
+add_executable(test_bjt2 test_bjt2.cpp)
+target_link_libraries(test_bjt2 e-XSpice_lib)
+
+# 8c. MOSFET NMOS/PMOS level-1 (Shichman-Hodges + Meyer)
+add_executable(test_mosfet test_mosfet.cpp)
+target_link_libraries(test_mosfet e-XSpice_lib)
+
+# 8d. MOSFET BSIM4 level-2 (NMOS2/PMOS2 cards, wrapper integration + MPI)
+add_executable(test_bsim4 test_bsim4.cpp)
+target_link_libraries(test_bsim4 e-XSpice_lib)
+
 # DC convergence diagnostics: current-source biased BJT (limiting walk)
 add_executable(debug_bjt_dc debug_bjt_dc.cpp)
 target_link_libraries(debug_bjt_dc e-XSpice_lib)
@@ -45,6 +57,9 @@ add_test(NAME Debug_Divider COMMAND debug_divider)
 add_test(NAME DAE_Physics COMMAND test_dae_physics)
 add_test(NAME Device_Models COMMAND test_models)
 add_test(NAME BJT_EbersMoll COMMAND test_bjt)
+add_test(NAME BJT_GummelPoon COMMAND test_bjt2)
+add_test(NAME MOSFET_Level1 COMMAND test_mosfet)
+add_test(NAME BSIM4_MOSFET COMMAND test_bsim4)
 
 # RL step debug
 add_executable(debug_rl debug_rl.cpp)
@@ -78,6 +93,10 @@ if(MPIEXEC_EXECUTABLE)
     if(MPIEXEC_MAX_NUMPROCS GREATER 3 OR MPIEXEC_MAX_NUMPROCS EQUAL "")
         add_test(NAME MPI_Ladder_4Ranks
                  COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 4 $<TARGET_FILE:test_mpi_ladder>)
+        # BSIM4 level-2 under MPI: exercises Mosfet::beginSolve/storeState and
+        # the limiter vote on the BSIM4 branch on every rank (former 0xC0000005).
+        add_test(NAME BSIM4_MOSFET_4Ranks
+                 COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 4 $<TARGET_FILE:test_bsim4>)
     endif()
     # Default-threshold mode (no EXSPICE_DISTRIBUTE override): exercises the
     # automatic assembly/solve selection under MPI.
