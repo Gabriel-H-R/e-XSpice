@@ -31,7 +31,6 @@
 #include "../../models/core/DeviceConstants.h"
 #include "MosfetBSIM4Model.h"
 #include "Junction.h"
-#include "../external/Bsim4Kernel.h"
 #include <cmath>
 
 namespace e_XSpice {
@@ -57,7 +56,6 @@ public:
     // Set by the Mosfet wrapper after construction.
     void setPolarity(int p) { p_ = p; }
     void setThermal(const MosfetBSIM4Thermal* t) { thermal_ = t; }
-    void setKernel(RCP<IBsim4Kernel> k) { kernel_ = std::move(k); }
 
     // ---------------------------------------------------------------
     // Evaluation
@@ -69,7 +67,7 @@ public:
      * @param vds  drain-source voltage (N-oriented)
      * @param vbs  bulk-source voltage (N-oriented)
      */
-    void evaluate(double vgs, double vds, double vbs) const;
+    void evaluate(double vgs, double vds, double vbs);
 
     /**
      * @brief Reads raw terminal voltages from the solution, applies
@@ -79,7 +77,7 @@ public:
      */
     void limitedVoltages(const DaeSolution& x,
                          int rd, int rg, int rs, int rb,
-                         bool allow_limiting) const;
+                         bool allow_limiting);
 
     // ---------------------------------------------------------------
     // Loaders — called by Mosfet::loadF/loadQ/loadJacobianF/loadJacobianQ
@@ -103,7 +101,6 @@ public:
 
 private:
     RCP<const MosfetBSIM4Model> model_;
-    RCP<IBsim4Kernel> kernel_;  // physics source (reference default)
     double W_ = 0.0, L_ = 0.0, M_ = 1.0, AREA_ = 1.0;
 
     // Polarity multiplier: +1 NMOS, −1 PMOS (set by Mosfet wrapper).

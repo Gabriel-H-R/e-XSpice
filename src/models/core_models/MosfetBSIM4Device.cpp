@@ -1,17 +1,17 @@
 /**
  * @author Gabriel Henrique Silva
  * @file MosfetBSIM4Device.cpp
- * @brief BSIM4 level-2 MOSFET — DAE shell (limiters + stamps).
+ * @brief BSIM4 level-2 MOSFET device — physics inline (no kernel adapter).
  *
- * Physics lives behind IBsim4Kernel (reference subset by default; Berkeley
- * C via the adapter skeleton when the shim is vendored). All voltages are
- * N-oriented.
+ * Simple, scalable design. Physics computed directly here; the Mosfet
+ * wrapper only applies polarity and stamps. If you later want the upstream
+ * Berkeley C (b4ld.c/b4temp.c), replace evaluate() — nothing else changes.
  */
 
 #include "MosfetBSIM4Device.h"
 #include "../core/DeviceConstants.h"
-#include "../external/Bsim4Kernel.h"
-#include "../external/Bsim4ReferenceKernel.h"
+#include "../../solver/DaeMatrix.h"
+#include "../../core/DaeSolution.h"
 
 #include <algorithm>
 #include <cmath>
@@ -22,11 +22,13 @@ namespace e_XSpice {
 
 bool MosfetBSIM4Device::debug_ = false;
 
+// ε_SiO2 = 3.9·ε_0
+static constexpr double EpsOx = 3.9 * 8.854214871e-12;
+
 MosfetBSIM4Device::MosfetBSIM4Device(
     RCP<const MosfetBSIM4Model> model,
     double W, double L, double M, double AREA)
-    : model_(std::move(model)), kernel_(make_rcp<Bsim4ReferenceKernel>()),
-      W_(W), L_(L), M_(M), AREA_(AREA) {
+    : model_(std::move(model)), W_(W), L_(L), M_(M), AREA_(AREA) {
     if (!model_) {
         throw std::invalid_argument("BSIM4 device requires a model card");
     }
@@ -62,13 +64,13 @@ double MosfetBSIM4Device::clampStep(double vnew, double vold,
 
 void MosfetBSIM4Device::limitedVoltages(const DaeSolution& x,
                                          int rd, int rg, int rs, int rb,
-                                         bool allow_limiting) const {
+                                         bool allow_limiting) {
     const double vd = (rd >= 0) ? x.data()[rd] : 0.0;
     const double vg = (rg >= 0) ? x.data()[rg] : 0.0;
     const double vs = (rs >= 0) ? x.data()[rs] : 0.0;
     const double vb = (rb >= 0) ? x.data()[rb] : 0.0;
 
-    // N-oriented controlling voltages (p = ±1 applied by caller).
+    // N-oriented controlling voltages (p applied by wrapper).
     double vgs = p_ * (vg - vs);
     double vds = p_ * (vd - vs);
     double vbs = p_ * (vb - vs);
@@ -93,70 +95,170 @@ void MosfetBSIM4Device::limitedVoltages(const DaeSolution& x,
     vgs_lim_ = vgs;
     vds_lim_ = vds;
     vbs_lim_ = vbs;
-
-    if (debug_) {
-        std::fprintf(stderr,
-                     "[MOS %s] lim vgs=%.6g vds=%.6g vbs=%.6g (lim=%d)\n",
-                     "MOSFET", vgs, vds, vbs,
-                     static_cast<int>(limiting_active_));
-    }
 }
 
-void MosfetBSIM4Device::evaluate(double vgs, double vds, double vbs) const {
-    if (!kernel_) {
-        throw std::runtime_error("BSIM4 device has no physics kernel");
-    }
-    Bsim4KernelInputs in;
-    in.card = model_.get();
-    in.thermal = thermal_;
-    in.W = W_;
-    in.L = L_;
-    in.M = M_;
-    in.AREA = AREA_;
-    in.vgs = vgs;
-    in.vds = vds;
-    in.vbs = vbs;
+void MosfetBSIM4Device::evaluate(double vgs, double vds, double vbs) {
+    const MosfetBSIM4Thermal& t = *thermal_;
+    const double mult = AREA_;
+    const double gmin = t.gmin;
 
-    Bsim4KernelOutputs out;
-    std::string err;
-    if (!kernel_->eval(in, out, err)) {
-        throw std::runtime_error("BSIM4 kernel '" +
-                                 std::string(kernel_->name()) +
-                                 "' failed: " + err);
-    }
+    // ---- source/drain swap for vds < 0 (device is symmetric) ----
+    const bool sw = (vds < 0.0);
+    swapped_ = sw;
+    const double vgs_e = sw ? vgs - vds : vgs;
+    const double vds_e = sw ? -vds : vds;
+    const double vbs_e = sw ? vbs - vds : vbs;
 
     vgs_cached_ = vgs;
     vds_cached_ = vds;
     vbs_cached_ = vbs;
-    vth_cached_ = out.vth;
-    saturated_ = out.saturated;
-    swapped_ = out.swapped;
 
-    id_ = out.id;
-    is_ = out.is;
-    ib_ = out.ib;
-    gm_ = out.gm;
-    gds_ = out.gds;
-    gmbs_ = out.gmbs;
+    // ---- threshold voltage with body effect ----
+    const double vto_n = model_->VTH0;
+    const double sqrtPhi = std::sqrt(std::max(model_->PHI, 1e-6));
+    const double phib = model_->PHI - vbs_e;
+    double dvth_dvbs = 0.0;
+    double vth = vto_n;
+    if (phib > 1e-3) {
+        const double sq = std::sqrt(phib);
+        vth += model_->GAMMA * (sq - sqrtPhi);
+        dvth_dvbs = -model_->GAMMA / (2.0 * sq);
+    } else {
+        vth += model_->GAMMA * (std::sqrt(1e-3) - sqrtPhi);
+    }
+    vth_cached_ = vth;
 
-    qg_ = out.qg;
-    qd_ = out.qd;
-    qb_ = out.qb;
+    // ---- effective mobility ----
+    const double ov = vgs_e - vth;
+    double ueff = t.u0;
+    const double leff = L_ - 2.0 * model_->LD;
+    if (leff <= 0.0) {
+        throw std::runtime_error("BSIM4: Leff = L - 2*LD must be positive");
+    }
+    const double denom_mob = 1.0 + (t.ua + 2.0 * t.ub * ov) * ov / leff;
+    ueff = t.u0 / denom_mob;
 
-    cgs_ = out.cgs;
-    cgd_ = out.cgd;
-    cgb_ = out.cgb;
-    cdg_ = out.cdg;
-    cdd_ = out.cdd;
-    cdb_ = out.cdb;
-    csg_ = out.csg;
-    csd_ = out.csd;
-    css_ = out.css;
-    csb_ = out.csb;
-    cbg_ = out.cbg;
-    cbd_ = out.cbd;
-    cbs_ = out.cbs;
-    cbb_ = out.cbb;
+    // ---- beta = KP * (W/Leff) * M ----
+    const double beta = model_->KP * (W_ / leff) * M_;
+    const double beta_over_u0 = beta * ueff / t.u0;
+
+    // ---- drain current ----
+    double Id = 0.0, gm = 0.0, gds = 0.0, gmbs = 0.0;
+    saturated_ = false;
+
+    if (ov > 0.0) {
+        const double vdsat = ov;
+        const double lame = 1.0 + model_->LAMBDA * vds_e;
+        if (vds_e < vdsat) {
+            // Linear (triode) region
+            Id = beta_over_u0 * (ov * vds_e - 0.5 * vds_e * vds_e) * lame;
+            gm = beta_over_u0 * vds_e * lame;
+            gds = beta_over_u0 * (ov - vds_e) * lame +
+                  beta_over_u0 * (ov * vds_e - 0.5 * vds_e * vds_e) *
+                  model_->LAMBDA;
+            gmbs = -gm * dvth_dvbs;
+            saturated_ = false;
+        } else {
+            // Saturation region
+            Id = 0.5 * beta_over_u0 * ov * ov * lame;
+            gm = beta_over_u0 * ov * lame;
+            gds = 0.5 * beta_over_u0 * ov * ov * model_->LAMBDA;
+            gmbs = -gm * dvth_dvbs;
+            saturated_ = true;
+        }
+    } else {
+        Id = 0.0;
+        gm = 0.0;
+        gds = 0.0;
+        gmbs = 0.0;
+        saturated_ = false;
+    }
+
+    // ---- bulk diodes (PHYSICAL frame, symmetric) ----
+    const double vbd_p = vbs - vds;
+    const double isBulk = t.isat * mult;
+    double arg = std::min(Const::MaxExpArg, vbs / t.vt);
+    const double evbs = std::exp(arg);
+    const double Ibs = isBulk * (evbs - 1.0) + gmin * vbs;
+    arg = std::min(Const::MaxExpArg, vbd_p / t.vt);
+    const double evbd = std::exp(arg);
+    const double Ibd = isBulk * (evbd - 1.0) + gmin * vbd_p;
+
+    // ---- map channel to physical frame ----
+    const double sid = sw ? -1.0 : 1.0;
+    id_ = sid * Id + Ibd;
+    is_ = -sid * Id + Ibs;
+    ib_ = -(Ibs + Ibd);
+
+    gm_ = gm;
+    gds_ = gds;
+    gmbs_ = gmbs;
+
+    // ---- charges (Meyer partition) ----
+    const double cox = EpsOx / model_->TOX * W_ * leff * mult;
+    const double cgso = model_->CGSO * W_ * mult;
+    const double cgdo = model_->CGDO * W_ * mult;
+    const double cgbo = model_->CGBO * leff * mult;
+
+    double Cgs_p, Cgd_p, Cgb_p;
+    if (!sw) {
+        if (saturated_) {
+            Cgs_p = (2.0 / 3.0) * cox + cgso;
+            Cgd_p = cgdo;
+        } else if (ov > 0.0) {
+            Cgs_p = 0.5 * cox + cgso;
+            Cgd_p = 0.5 * cox + cgdo;
+        } else {
+            Cgs_p = cgso;
+            Cgd_p = cgdo;
+        }
+        Cgb_p = cox + cgbo;
+    } else {
+        if (saturated_) {
+            Cgs_p = cgdo;
+            Cgd_p = (2.0 / 3.0) * cox + cgso;
+        } else if (ov > 0.0) {
+            Cgs_p = cgdo;
+            Cgd_p = 0.5 * cox + cgso;
+        } else {
+            Cgs_p = cgdo;
+            Cgd_p = cgso;
+        }
+        Cgb_p = cox + cgbo;
+    }
+
+    // Bulk depletion (exact Q/C from shared junction model)
+    const double factor = t.bulkCap.cjo;
+    const JunctionGeom geomS{model_->CBS * mult * factor, 0.0, model_->MJ};
+    const JunctionGeom geomD{model_->CBD * mult * factor, 0.0, model_->MJ};
+    const JunctionChargePoint jbs =
+        junctionCharge(vbs, 0.0, 0.0, geomS, t.bulkCap);
+    const JunctionChargePoint jbd =
+        junctionCharge(vbd_p, 0.0, 0.0, geomD, t.bulkCap);
+    const double Cbs = jbs.c, Cbd = jbd.c;
+
+    // Nodal charges (charge-conserving by construction)
+    const double vgd_p = vgs - vds;
+    const double vgb_p = vgs - vbs;
+    qg_ = Cgs_p * vgs + Cgd_p * vgd_p + Cgb_p * vgb_p;
+    qd_ = -Cgd_p * vgd_p - jbd.q;
+    qb_ = -Cgb_p * vgb_p + jbs.q + jbd.q;
+
+    // Capacitances (dQ/dV)
+    cgs_ = Cgs_p;
+    cgd_ = Cgd_p;
+    cgb_ = Cgb_p;
+    cdg_ = -Cgd_p;
+    cdd_ = Cgd_p;
+    cdb_ = -Cbd;
+    csg_ = -Cgs_p;
+    csd_ = 0.0;
+    css_ = Cgs_p;
+    csb_ = -Cbs;
+    cbg_ = -Cgb_p;
+    cbd_ = -Cbd;
+    cbs_ = -Cbs;
+    cbb_ = Cgb_p;
 }
 
 void MosfetBSIM4Device::loadF(std::vector<double>& F) const {
@@ -186,30 +288,27 @@ void MosfetBSIM4Device::loadJacobianF(DaeMatrix& J,
     const double gm = gm_;
     const double gds = gds_;
     const double gmbs = gmbs_;
-    const double gibd = 0.0;
 
     if (!swapped_) {
         ef[0*4+1] = gm;                              // d/dg
-        ef[0*4+0] = gds - gibd;                      // d/dd
+        ef[0*4+0] = gds;                             // d/dd
         ef[0*4+2] = -(gm + gds + gmbs);              // d/ds
-        ef[0*4+3] = gmbs + gibd;                     // d/db
+        ef[0*4+3] = gmbs;                            // d/db
         ef[2*4+1] = -gm;                             // s/dg
         ef[2*4+0] = -gds;                            // s/dd
         ef[2*4+2] = (gm + gds + gmbs);               // s/ds
         ef[2*4+3] = -gmbs;                           // s/db
     } else {
         ef[0*4+1] = -gm;                             // d/dg
-        ef[0*4+0] = (gm + gds + gmbs) - gibd;        // d/dd
+        ef[0*4+0] = (gm + gds + gmbs);               // d/dd
         ef[0*4+2] = -gds;                            // d/ds
-        ef[0*4+3] = -gmbs + gibd;                    // d/db
+        ef[0*4+3] = -gmbs;                           // d/db
         ef[2*4+1] = gm;                             // s/dg
         ef[2*4+0] = -(gm + gds + gmbs);              // s/dd
-        ef[2*4+2] = gds;                            // s/ds
-        ef[2*4+3] = gmbs;                           // s/db
+        ef[2*4+2] = gds;                             // s/ds
+        ef[2*4+3] = gmbs;                            // s/db
     }
-    ef[3*4+0] = gibd;                 // b/dd
-    ef[3*4+2] = gibd;                 // b/ds
-    ef[3*4+3] = -2.0 * gibd;          // b/db
+    // Bulk terminal: no separate bulk diode derivative in this subset.
 
     for (int k = 0; k < 16; ++k) {
         if (slots[k] >= 0) {
