@@ -28,7 +28,7 @@ namespace e_XSpice {
  */
 class ResistorModel : public DeviceModel {
 public:
-    explicit ResistorModel(std::string name) : DeviceModel(std::move(name)) {}
+    explicit ResistorModel(std::string name);
 
     std::string typeName() const override { return "R"; }
 
@@ -49,20 +49,6 @@ public:
         const double dT = tempKelvin - TNOM;
         return Rmult * (1.0 + TC1 * dT + TC2 * dT * dT);
     }
-
-    static RCP<DeviceModel> fromCard(const std::string& name,
-                                     const ParamMap& params) {
-        ModelCard card;
-        card.name = name;
-        card.type = "R";
-        card.params = params;
-        RCP<ResistorModel> m = make_rcp<ResistorModel>(name);
-        m->Rmult = card.get("R", m->Rmult);
-        m->TC1   = card.get("TC1", m->TC1);
-        m->TC2   = card.get("TC2", m->TC2);
-        if (card.given("TNOM")) m->TNOM = card.get("TNOM", 27.0) + 273.15;
-        return m;
-    }
 };
 
 /**
@@ -70,7 +56,7 @@ public:
  */
 class CapacitorModel : public DeviceModel {
 public:
-    explicit CapacitorModel(std::string name) : DeviceModel(std::move(name)) {}
+    explicit CapacitorModel(std::string name);
 
     std::string typeName() const override { return "C"; }
 
@@ -88,20 +74,6 @@ public:
         const double dT = tempKelvin - TNOM;
         return Cmult * (1.0 + TC1 * dT + TC2 * dT * dT);
     }
-
-    static RCP<DeviceModel> fromCard(const std::string& name,
-                                     const ParamMap& params) {
-        ModelCard card;
-        card.name = name;
-        card.type = "C";
-        card.params = params;
-        RCP<CapacitorModel> m = make_rcp<CapacitorModel>(name);
-        m->Cmult = card.get("C", m->Cmult);
-        m->TC1   = card.get("TC1", m->TC1);
-        m->TC2   = card.get("TC2", m->TC2);
-        if (card.given("TNOM")) m->TNOM = card.get("TNOM", 27.0) + 273.15;
-        return m;
-    }
 };
 
 /**
@@ -109,7 +81,7 @@ public:
  */
 class InductorModel : public DeviceModel {
 public:
-    explicit InductorModel(std::string name) : DeviceModel(std::move(name)) {}
+    explicit InductorModel(std::string name);
 
     std::string typeName() const override { return "L"; }
 
@@ -126,20 +98,6 @@ public:
     double factor(double tempKelvin) const {
         const double dT = tempKelvin - TNOM;
         return Lmult * (1.0 + TC1 * dT + TC2 * dT * dT);
-    }
-
-    static RCP<DeviceModel> fromCard(const std::string& name,
-                                     const ParamMap& params) {
-        ModelCard card;
-        card.name = name;
-        card.type = "L";
-        card.params = params;
-        RCP<InductorModel> m = make_rcp<InductorModel>(name);
-        m->Lmult = card.get("L", m->Lmult);
-        m->TC1   = card.get("TC1", m->TC1);
-        m->TC2   = card.get("TC2", m->TC2);
-        if (card.given("TNOM")) m->TNOM = card.get("TNOM", 27.0) + 273.15;
-        return m;
     }
 };
 

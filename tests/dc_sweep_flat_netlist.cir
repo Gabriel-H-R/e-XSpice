@@ -1,0 +1,21 @@
+* ============================================================
+* Flat DC sweep on a CMOS inverter (level-2 BSIM4): VG swept 0 -> 3 V.
+*   -> 7 operating points, one swept column in the CSV.
+* Companion of dc_sweep_nested_netlist.cir, which sweeps the same
+* circuit with an OUTER VDD loop (nested .DC, 25 points).
+* ============================================================
+
+.MODEL NMOS2 NMOS2 (LEVEL=2 VTH0=0.45 KP=120e-6 GAMMA=0.4 PHI=0.7 LAMBDA=0.02 U0=0.45 TOX=8e-9 NFS=1e11 VSAT=8e4)
+
+.MODEL PMOS2 PMOS2 (LEVEL=2 VTH0=-0.45 KP=40e-6 GAMMA=0.5 PHI=0.7 LAMBDA=0.03 U0=0.15 TOX=8e-9 NFS=1e11 VSAT=8e4)
+
+VDD  vdd 0 DC 3
+VG   vg  0 DC 0.0
+
+MN   vout vg 0 0 NMOS2 W=2u L=0.5u
+MP   vout vg vdd vdd PMOS2 W=4u L=0.5u
+RL   vout 0 1meg          * DC load: keeps vout well posed between the rails
+
+.DC VG 0.0 3.0 0.5
+
+.END

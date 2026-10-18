@@ -16,11 +16,15 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <stdexcept>
 
 namespace e_XSpice {
 
-bool MosfetBSIM4Device::debug_ = false;
+// EXSPICE_DEBUG_BSIM4=1 dumps one line per evaluation (diagnostics only:
+// off by default, and the fprintf stays out of the Newton hot path).
+bool MosfetBSIM4Device::debug_ =
+    (std::getenv("EXSPICE_DEBUG_BSIM4") != nullptr);
 
 // ε_SiO2 = 3.9·ε_0
 static constexpr double EpsOx = 3.9 * 8.854214871e-12;
@@ -157,7 +161,11 @@ void MosfetBSIM4Device::evaluate(double vgs, double vds, double vbs) {
     vbs_cached_ = vbs;
 
     // ---- threshold voltage with body effect ----
-    const double vto_n = model_->VTH0;
+    // VTH0 carries the SPICE sign (negative for PMOS); the evaluation frame
+    // is N-oriented, so the polarity is applied here exactly like the
+    // level-1 wrapper does with VTO (without it a PMOS would see a NEGATIVE
+    // threshold and get stronger as the gate approaches the source).
+    const double vto_n = p_ * model_->VTH0;
     const double sqrtPhi = std::sqrt(std::max(model_->PHI, 1e-6));
     const double phib = model_->PHI - vbs_e;
     double dvth_dvbs = 0.0;
@@ -237,6 +245,15 @@ void MosfetBSIM4Device::evaluate(double vgs, double vds, double vbs) {
     gds_ = gds;
     gmbs_ = gmbs;
 
+    if (debug_) {
+        std::fprintf(stderr,
+            "[B4 p=%+d] vgs=%+.6g vds=%+.6g vbs=%+.6g | vth=%+.6g ov=%+.6g"
+            " u0=%.6g ua=%.6g ub=%.6g ueff=%.6g W=%.6g Leff=%.6g KP=%.6g"
+            " beta=%.6g Id=%+.6g gm=%.6g gds=%.6g sat=%d\n",
+            p_, vgs, vds, vbs, vth, ov, t.u0, t.ua, t.ub, ueff, W_, leff,
+            model_->KP, beta_over_u0, id_, gm_, gds_, (int)saturated_);
+    }
+
     // ---- charges (Meyer partition) ----
     const double cox = EpsOx / model_->TOX * W_ * leff * mult;
     const double cgso = model_->CGSO * W_ * mult;
@@ -304,23 +321,30 @@ void MosfetBSIM4Device::evaluate(double vgs, double vds, double vbs) {
     cbb_ = Cgb_p;
 }
 
-void MosfetBSIM4Device::loadF(std::vector<double>& F) const {
-    // Terminal order: D(0), G(1), S(2), B(3)
-    // Terminal currents (positive INTO device)
-    if (F.size() < 4) return;
-    F[0] += id_;
-    F[1] += 0.0;  // gate current = 0
-    F[2] += is_;
-    F[3] += ib_;
+void MosfetBSIM4Device::loadF(std::vector<double>& F,
+                              int rd, int rg, int rs, int rb) const {
+    // Terminal order: D, G, S, B. Terminal currents are N-oriented
+    // (positive INTO the device); p_ maps them to the physical frame, so
+    // the stamp below is the current leaving each node of a PMOS.
+    const int r[4] = {rd, rg, rs, rb};
+    const double iv[4] = {id_, 0.0, is_, ib_};
+    for (int i = 0; i < 4; ++i) {
+        if (r[i] >= 0 && static_cast<size_t>(r[i]) < F.size()) {
+            F[r[i]] += p_ * iv[i];
+        }
+    }
 }
 
-void MosfetBSIM4Device::loadQ(std::vector<double>& Q) const {
-    if (Q.size() < 4) return;
-    // Nodal charges: Qd, Qg, Qs(derived), Qb
-    Q[0] += qd_;
-    Q[1] += qg_;
-    Q[2] += -(qg_ + qd_ + qb_);
-    Q[3] += qb_;
+void MosfetBSIM4Device::loadQ(std::vector<double>& Q,
+                              int rd, int rg, int rs, int rb) const {
+    // Nodal charges (N-oriented): Qd, Qg, Qs derived by conservation, Qb.
+    const int r[4] = {rd, rg, rs, rb};
+    const double qv[4] = {qd_, qg_, -(qg_ + qd_ + qb_), qb_};
+    for (int i = 0; i < 4; ++i) {
+        if (r[i] >= 0 && static_cast<size_t>(r[i]) < Q.size()) {
+            Q[r[i]] += p_ * qv[i];
+        }
+    }
 }
 
 void MosfetBSIM4Device::loadJacobianF(DaeMatrix& J,

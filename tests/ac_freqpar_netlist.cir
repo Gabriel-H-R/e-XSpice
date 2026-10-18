@@ -1,0 +1,10 @@
+* `.OPTIONS ACFREQPAR`: the AC FREQUENCIES are split across MPI ranks.
+* Each rank factorizes the same replicated (G, C) at the operating point and
+* the phasors are exchanged in batches, so the answer is bit-identical to a
+* serial run — only the work distribution changes.
+.OPTIONS ACFREQPAR
+V1 in 0 DC 0 AC 1
+L1 in out 1e-3
+R1 out 0 1
+.AC DEC 10 100 1e6
+.END

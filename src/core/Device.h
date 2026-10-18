@@ -59,6 +59,10 @@
 #include "e_XSpice_rcp.h"   // RCP<T>: intrusive refcounted ownership
 #include "Node.h"
 #include "StateIndex.h"
+// Complete type: temperatureCard() hands RCP<const DeviceModel> handles
+// around, and RCP's release path calls dec_ref() on the pointee.
+// DeviceModel.h does not depend on Device.h, so this is not a cycle.
+#include "../models/core/DeviceModel.h"
 
 namespace e_XSpice {
 
@@ -205,6 +209,36 @@ public:
     }
 
     /**
+     * @brief Loads the SMALL-SIGNAL (AC) excitation of this device.
+     *
+     * The AC analysis is purely linear and reuses the DC linearization for
+     * the matrix:
+     *
+     *      ( dF/dx + j·w·dQ/dx ) · X = B_ac(w)
+     *
+     * dF/dx and dQ/dx are exactly what loadJacobianF/loadJacobianQ already
+     * produce at the operating point, so a device needs NO new physics hook
+     * for the matrix — only for the excitation, which is this method.
+     * Keeping the complex phasor as two real vectors avoids a <complex>
+     * dependency in the device layer and matches the split representation
+     * the linear solver works with.
+     *
+     * @param omega  2·pi·f (available for frequency-dependent devices)
+     * @param Breal  real part of the AC right-hand side (output, +=)
+     * @param Bimag  imaginary part (output, +=)
+     *
+     * Sign convention mirrors loadB: the device's contribution is what the
+     * residual F + jwQ - B = 0 needs on the right-hand side.
+     *          Voltage source: B[branch] += mag·cos(phase), += mag·sin(phase)
+     *          Current source: B[pos] -= I; B[neg] += I
+     */
+    virtual void loadACExcitation(double omega,
+                                  std::vector<double>& Breal,
+                                  std::vector<double>& Bimag) const {
+        (void)omega; (void)Breal; (void)Bimag;
+    }
+
+    /**
      * @brief Loads the static Jacobian J_F = dF/dx.
      */
     virtual void loadJacobianF(DaeMatrix& J, const DaeSolution& x,
@@ -289,6 +323,34 @@ public:
     virtual void setICOperatingPoint(bool on) { ic_operating_point_ = on; }
     bool isICOperatingPoint() const { return ic_operating_point_; }
 
+    /**
+     * @brief Notifies the device that the circuit temperature changed
+     *        (`.TEMP <t>` or a `.DC TEMP ...` sweep).
+     *
+     * Devices that read their thermal quantities through a pointer into the
+     * model card (diode, BJT, BSIM4 MOSFET) need nothing: the card was
+     * re-scaled and the next evaluation picks it up. Devices that PRECOMPUTE
+     * temperature-dependent values (resistor conductance, MOSFET cox) must
+     * refresh them here — the default is a no-op.
+     *
+     * An instance that pinned its own `TEMP=` keeps its private thermal
+     * snapshot (SPICE precedence: instance > card > circuit).
+     */
+    virtual void setCircuitTemperature(double /*kelvin*/) {}
+
+    /**
+     * @brief The model card whose thermal snapshot this device follows
+     *        (null handle when the device is ideal or has no card).
+     *
+     * Circuit::setTemperature() collects the DISTINCT cards through this
+     * accessor once, so a temperature change costs O(cards) instead of
+     * O(devices) — cards are shared, and re-scaling one card N times would
+     * repeat the same thermal math N times.
+     */
+    virtual RCP<const DeviceModel> temperatureCard() const {
+        return RCP<const DeviceModel>();
+    }
+
     // ---------------------------------------------------------------
     // OUTPUTS / INTERROGATION
     // ---------------------------------------------------------------
@@ -340,6 +402,22 @@ public:
      *        clear per-iteration bookkeeping (e.g. limiting flags).
      */
     virtual void confirmAccept() {}
+
+    /**
+     * @brief Re-anchors the limiting history by evaluating THIS point.
+     *
+     * Called whenever the solver restores x_ to a sane point after failed
+     * iterations (dt-cut retry, homotopy warm-start): the devices'
+     * limiter histories (previous limited voltages) tracked the garbage
+     * trajectory and would misfire pnjlim on the very next iteration
+     * (e.g. clamping a sane 5 V down to vcrit because |5 − 1e6| > 2·Vt).
+     * Re-evaluating WITHOUT limiting at the restored point gives sane
+     * history anchors. Default: clear the limiting flag.
+     */
+    virtual void resetIterationState(const DaeSolution& x) {
+        (void)x;
+        confirmAccept();
+    }
 
     /**
      * @brief Called at the start of each nonlinear solve. Devices that keep

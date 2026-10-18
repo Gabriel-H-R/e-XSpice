@@ -115,9 +115,17 @@ public:
 
     // ---------------------------------------------------------------
     // Loaders — called by Mosfet::loadF/loadQ/loadJacobianF/loadJacobianQ
+    //
+    // The residual/charge vectors are the GLOBAL nodal vectors (rows =
+    // nodes + branch unknowns), so the terminal rows must be passed in:
+    // this device knows its currents and charges, not the MNA layout.
+    // The N-oriented currents/charges are multiplied by the polarity here,
+    // exactly like the level-1 wrapper does.
     // ---------------------------------------------------------------
-    void loadF(std::vector<double>& F) const;
-    void loadQ(std::vector<double>& Q) const;
+    void loadF(std::vector<double>& F,
+               int rd, int rg, int rs, int rb) const;
+    void loadQ(std::vector<double>& Q,
+               int rd, int rg, int rs, int rb) const;
     void loadJacobianF(DaeMatrix& J,
                        const std::vector<int>& slots) const;
     void loadJacobianQ(DaeMatrix& J,

@@ -44,6 +44,18 @@ target_link_libraries(test_mosfet e-XSpice_lib)
 add_executable(test_bsim4 test_bsim4.cpp)
 target_link_libraries(test_bsim4 e-XSpice_lib)
 
+# 8e. DC sweep (.DC LIN/DEC/OCT over a V/I source, warm-started chain)
+add_executable(test_dc_sweep test_dc_sweep.cpp)
+target_link_libraries(test_dc_sweep e-XSpice_lib)
+
+# 8f. Sparse complex LU (the AC small-signal factorization kernel)
+add_executable(test_complex_lu test_complex_lu.cpp)
+target_link_libraries(test_complex_lu e-XSpice_lib)
+
+# 8g. AC small-signal analysis (.AC)
+add_executable(test_ac test_ac.cpp)
+target_link_libraries(test_ac e-XSpice_lib)
+
 # DC convergence diagnostics: current-source biased BJT (limiting walk)
 add_executable(debug_bjt_dc debug_bjt_dc.cpp)
 target_link_libraries(debug_bjt_dc e-XSpice_lib)
@@ -60,6 +72,9 @@ add_test(NAME BJT_EbersMoll COMMAND test_bjt)
 add_test(NAME BJT_GummelPoon COMMAND test_bjt2)
 add_test(NAME MOSFET_Level1 COMMAND test_mosfet)
 add_test(NAME BSIM4_MOSFET COMMAND test_bsim4)
+add_test(NAME DC_Sweep COMMAND test_dc_sweep)
+add_test(NAME Complex_LU COMMAND test_complex_lu)
+add_test(NAME AC_Analysis COMMAND test_ac)
 
 # RL step debug
 add_executable(debug_rl debug_rl.cpp)
@@ -102,7 +117,142 @@ if(MPIEXEC_EXECUTABLE)
     # automatic assembly/solve selection under MPI.
     add_test(NAME MPI_Ladder_Auto_2Ranks
              COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2 $<TARGET_FILE:test_mpi_ladder> auto)
+    # DC sweep under MPI: same deterministic sweep on every rank.
+    add_test(NAME DC_Sweep_2Ranks
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2 $<TARGET_FILE:test_dc_sweep>)
 endif()
+
+# ============================================================
+# End-to-end .DC netlist runs through the CLI (parser -> analysis -> CSV).
+# ============================================================
+
+# Diode clipper swept -10 V .. 15 V in 1 V steps (Xyce Users' Guide 1.4):
+# 26 operating points, node columns named after the netlist nodes.
+add_test(NAME DC_Sweep_Netlist
+         COMMAND ${CMAKE_COMMAND}
+                 -DBINARY=$<TARGET_FILE:e-XSpice>
+                 -DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/dc_sweep_test_netlist.cir
+                 -DEXPECT_ROWS=26
+                 -DEXPECT_HEADER=VIN,Vin,Vout
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/check_csv.cmake)
+
+# Nested sweep on a BSIM4 CMOS inverter: VDD (outer, 5 points) x VG (inner,
+# 5 points) = 25 operating points, two swept columns in the CSV.
+add_test(NAME DC_Sweep_Netlist_Nested
+         COMMAND ${CMAKE_COMMAND}
+                 -DBINARY=$<TARGET_FILE:e-XSpice>
+                 -DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/dc_sweep_nested_netlist.cir
+                 -DEXPECT_ROWS=25
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/check_csv.cmake)
+
+# Flat sweep on a BSIM4 CMOS inverter: VG 0 -> 3 V in 0.5 V steps
+# (7 operating points, one swept column).
+add_test(NAME DC_Sweep_Netlist_Flat
+         COMMAND ${CMAKE_COMMAND}
+                 -DBINARY=$<TARGET_FILE:e-XSpice>
+                 -DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/dc_sweep_flat_netlist.cir
+                 -DEXPECT_ROWS=7
+                 -DEXPECT_HEADER=VG,Vvdd,Vvg,Vvout
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/check_csv.cmake)
+
+# Temperature sweep (.DC TEMP -40 125 25 on a copper resistor model):
+# 8 points, one swept column (TEMP).
+add_test(NAME DC_Sweep_Netlist_Temp
+         COMMAND ${CMAKE_COMMAND}
+                 -DBINARY=$<TARGET_FILE:e-XSpice>
+                 -DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/dc_sweep_temp_netlist.cir
+                 -DEXPECT_ROWS=7
+                 -DEXPECT_HEADER=TEMP,Vin,Vout
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/check_csv.cmake)
+
+# Same netlists under MPI: the distributed CSV must be byte-identical to the
+# serial one (deterministic sweep on every rank).
+if(MPIEXEC_EXECUTABLE)
+    add_test(NAME DC_Sweep_Netlist_MPI
+             COMMAND ${CMAKE_COMMAND}
+                     -DBINARY=$<TARGET_FILE:e-XSpice>
+                     -DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/dc_sweep_test_netlist.cir
+                     -DEXPECT_ROWS=26
+                     -DEXPECT_HEADER=VIN,Vin,Vout
+                     -DMPIEXEC=${MPIEXEC_EXECUTABLE}
+                     -DMPI_NP_FLAG=${MPIEXEC_NUMPROC_FLAG}
+                     -DMPI_NP=2
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/check_csv.cmake)
+    add_test(NAME DC_Sweep_Netlist_Nested_MPI
+             COMMAND ${CMAKE_COMMAND}
+                     -DBINARY=$<TARGET_FILE:e-XSpice>
+                     -DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/dc_sweep_nested_netlist.cir
+                     -DEXPECT_ROWS=25
+                     -DMPIEXEC=${MPIEXEC_EXECUTABLE}
+                     -DMPI_NP_FLAG=${MPIEXEC_NUMPROC_FLAG}
+                     -DMPI_NP=2
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/check_csv.cmake)
+    # `.OPTIONS SWEEPPAR`: sweep POINTS split across ranks (each rank keeps
+    # its own continuation chain). Smoke test that the distributed-point path
+    # completes; numeric equivalence to the sequential run is checked inside
+    # test_dc_sweep (section 10), where a tolerance comparison is possible.
+    add_test(NAME DC_Sweep_Netlist_SweepPar
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                     $<TARGET_FILE:e-XSpice> file
+                     ${CMAKE_CURRENT_SOURCE_DIR}/dc_sweep_sweeppar_netlist.cir
+                     ${CMAKE_CURRENT_BINARY_DIR}/dcsweep_sweeppar.csv)
+    set_tests_properties(DC_Sweep_Netlist_SweepPar PROPERTIES
+        PASS_REGULAR_EXPRESSION "points distributed over 2 ranks")
+endif()
+
+# ================================================================
+# AC small-signal analysis (.AC) — end to end through the CLI
+# ================================================================
+# RC low-pass, DEC 2 points/decade from 10 Hz to 1 MHz = 11 frequencies.
+add_test(NAME AC_Netlist
+         COMMAND ${CMAKE_COMMAND}
+                 -DBINARY=$<TARGET_FILE:e-XSpice>
+                 -DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/ac_rc_netlist.cir
+                 -DEXPECT_ROWS=11
+                 -DEXPECT_HEADER=frequency,Vin_mag,Vin_phase,Vout_mag,Vout_phase,V1_imag_mag,V1_imag_phase
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/check_csv.cmake)
+
+# MNA circuit (inductor + source): the pivot-safe ordering path through the
+# CLI, and the branch-current columns of the CSV.
+add_test(NAME AC_Netlist_MNA
+         COMMAND ${CMAKE_COMMAND}
+                 -DBINARY=$<TARGET_FILE:e-XSpice>
+                 -DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/ac_rlc_netlist.cir
+                 -DEXPECT_ROWS=41
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/check_csv.cmake)
+
+if(MPIEXEC_EXECUTABLE)
+    # The AC sweep is deterministic by construction: frequencies are
+    # independent and every rank factorizes the same replicated matrix, so the
+    # distributed CSV must be BYTE-IDENTICAL to the serial one (unlike the
+    # DC sweep, whose continuation chain is path dependent).
+    add_test(NAME AC_Netlist_MPI
+             COMMAND ${CMAKE_COMMAND}
+                     -DBINARY=$<TARGET_FILE:e-XSpice>
+                     -DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/ac_rc_netlist.cir
+                     -DEXPECT_ROWS=11
+                     -DEXPECT_HEADER=frequency,Vin_mag,Vin_phase,Vout_mag,Vout_phase,V1_imag_mag,V1_imag_phase
+                     -DMPIEXEC=${MPIEXEC_EXECUTABLE}
+                     -DMPI_NP_FLAG=${MPIEXEC_NUMPROC_FLAG}
+                     -DMPI_NP=2
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/check_csv.cmake)
+
+    # `.OPTIONS ACFREQPAR`: frequencies split across ranks. Same guarantee —
+    # bit-identical results, only the work distribution changes.
+    add_test(NAME AC_Netlist_FreqPar
+             COMMAND ${CMAKE_COMMAND}
+                     -DBINARY=$<TARGET_FILE:e-XSpice>
+                     -DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/ac_freqpar_netlist.cir
+                     -DEXPECT_ROWS=41
+                     -DMPIEXEC=${MPIEXEC_EXECUTABLE}
+                     -DMPI_NP_FLAG=${MPIEXEC_NUMPROC_FLAG}
+                     -DMPI_NP=2
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/check_csv.cmake)
+endif()
+
+
+
+
 
 
 

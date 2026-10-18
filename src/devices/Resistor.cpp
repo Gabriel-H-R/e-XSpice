@@ -86,6 +86,26 @@ void Resistor::loadJacobianF(DaeMatrix& J, const DaeSolution& x,
 }
 
 // ---------------------------------------------------------------
+// Sweep hook (.DC R1 ...) / circuit temperature (.TEMP)
+// ---------------------------------------------------------------
+
+double Resistor::getEffectiveResistance() const {
+    return (conductance_ > 0.0) ? 1.0 / conductance_ : 0.0;
+}
+
+void Resistor::setEffectiveResistance(double ohms) {
+    if (!(ohms > 0.0)) ohms = 1e-12;   // near short instead of division by zero
+    resistance_ = ohms;
+    conductance_ = 1.0 / ohms;
+}
+
+void Resistor::setCircuitTemperature(double kelvin) {
+    if (!model_) return;
+    const double effective = resistance_ * model_->factor(kelvin);
+    conductance_ = (effective > 0.0) ? 1.0 / effective : 0.0;
+}
+
+// ---------------------------------------------------------------
 // Outputs
 // ---------------------------------------------------------------
 

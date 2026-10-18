@@ -1,0 +1,18 @@
+* ============================================================
+* DC sweep with the POINTS distributed across MPI ranks
+* (`.OPTIONS SWEEPPAR`): each rank owns a contiguous block of the grid and
+* runs its own continuation chain; results are exchanged per point.
+* Diode clipper from the Xyce Users' Guide, 26 points.
+* ============================================================
+
+.MODEL DMOD D (IS=1e-14 N=1.2 RS=0.5 CJO=0 VJ=0.7 BV=20)
+
+VIN in 0 DC 0
+R1  in out 1k
+D1  out 0 DMOD
+
+.DC VIN -10 15 1
+
+.OPTIONS SWEEPPAR MAXITERS=250 RETRY=4
+
+.END

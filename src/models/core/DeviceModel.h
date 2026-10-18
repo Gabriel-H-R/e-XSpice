@@ -81,6 +81,26 @@ public:
     virtual void updateTemperature(double tempKelvin) { (void)tempKelvin; }
 
     /**
+     * @brief True when the card carried its own `TEMP=`, which by SPICE
+     *        convention wins over the circuit temperature (`.TEMP`). Cards
+     *        without it follow the circuit temperature.
+     */
+    bool cardTempGiven() const { return card_temp_given_; }
+
+    /**
+     * @brief Applies the circuit temperature to this card.
+     *
+     * Called once per `.TEMP`/temperature-sweep value. A no-op when the
+     * card pinned its own TEMP (SPICE precedence: instance TEMP > card TEMP
+     * > circuit TEMP; instances are handled by the device, which owns its
+     * own thermal snapshot and never asks the card).
+     */
+    virtual void setOperatingTemperature(double tempKelvin) {
+        if (card_temp_given_) return;
+        updateTemperature(tempKelvin);
+    }
+
+    /**
      * @brief Returns true if this model card is a BSIM4 level-2 card.
      *        Base class returns false; MosfetBSIM4Model overrides to true.
      */
@@ -115,7 +135,13 @@ public:
         std::vector<std::string> unknown =
             applyParamTable(*this, params_, params);
         for (const auto& kv : params) {
-            if (hasParam(kv.first)) onParamGiven(kv.first);
+            if (hasParam(kv.first)) {
+                // TEMP on a card pins its temperature against `.TEMP`
+                // (SPICE precedence). One generic rule in the base class,
+                // so every card type inherits it without extra code.
+                if (kv.first == "TEMP") card_temp_given_ = true;
+                onParamGiven(kv.first);
+            }
         }
         return unknown;
     }
@@ -135,6 +161,11 @@ protected:
     void declareParams(std::vector<ModelParamDesc> table) {
         params_ = std::move(table);
     }
+
+    /**
+     * @brief Set when the card carried TEMP= (see cardTempGiven()).
+     */
+    bool card_temp_given_ = false;
 
     /**
      * @brief Fires once per APPLIED card key (canonical or alias spelling).

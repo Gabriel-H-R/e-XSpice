@@ -122,6 +122,40 @@ public:
     
     std::string getName() const { return name_; }
 
+    // ---------------------------------------------------------------
+    // Circuit temperature (SPICE `.TEMP`)
+    // ---------------------------------------------------------------
+
+    /**
+     * @brief Operating temperature in Kelvin (300.15 K = 27 °C by default).
+     *
+     * Applied by setTemperature() to every model card that did not pin its
+     * own TEMP, and to every device that precomputes temperature-dependent
+     * values. Idempotent: calling it with the same temperature twice does no
+     * work, which is what makes a temperature sweep cheap.
+     *
+     * Cost per DISTINCT temperature is O(cards + devices): cards are
+     * collected (deduplicated) once and re-scaled by shared pointer, while
+     * devices refresh only the scalars they precomputed.
+     *
+     * Apply it after the netlist is built (main does), so every device sees
+     * the temperature from its constructor onwards. Devices added later
+     * still get their card re-scaled (the card list is invalidated), but
+     * their construction-time scalars would start at TNOM.
+     */
+    void setTemperature(double kelvin);
+
+    /**
+     * @brief Operating temperature in Kelvin.
+     */
+    double temperature() const { return temperature_; }
+
+    /**
+     * @brief True once setTemperature() (or `.TEMP`) pinned the circuit
+     *        temperature, i.e. cards were re-scaled to it.
+     */
+    bool temperatureGiven() const { return temperature_given_; }
+
 private:
     std::string name_;
     RCP<Node> ground_node_;                        // Node 0 (reference)
@@ -131,6 +165,17 @@ private:
     std::map<int, RCP<Node>> node_map_;             // ID -> Node
     std::map<std::string, RCP<Node>> node_name_map_; // Name -> Node
     std::map<std::string, RCP<Device>> device_map_;  // Name -> Device
+
+    double temperature_ = 300.15;      // Kelvin
+    bool   temperature_given_ = false;
+    // Distinct cards reached through Device::temperatureCard(), rebuilt
+    // lazily after any addDevice() so a temperature change is O(cards).
+    // Handles are const (the const expresses "parameters are read-only"),
+    // but temperature re-scaling is an explicit, controlled mutation of the
+    // shared snapshot — exactly like Xyce's Model::temperatureStep.
+    std::vector<const DeviceModel*> temperature_cards_;
+    bool temperature_cards_dirty_ = true;
+    bool temperature_cards_scanned_ = false;
 
     int next_node_id_;
 };

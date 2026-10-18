@@ -38,6 +38,27 @@ void CurrentSource::loadB(double time, std::vector<double>& B) const {
     if (in >= 0) B[in] += i;
 }
 
+void CurrentSource::loadACExcitation(double omega,
+                                    std::vector<double>& Breal,
+                                    std::vector<double>& Bimag) const {
+    (void)omega;  // a source phasor is frequency independent by definition
+    if (!waveform_.hasAC()) return;       // silent source: no AC excitation
+    const int ip = rowOf(nodes_[0]);
+    const int in = rowOf(nodes_[1]);
+    double re = 0.0, im = 0.0;
+    waveform_.acPhasor(re, im);
+    // Same sign convention as loadB: the current leaves the + node inside
+    // the source, so it enters the KCL rows as -I at pos and +I at neg.
+    if (ip >= 0) {
+        Breal[static_cast<size_t>(ip)] -= re;
+        Bimag[static_cast<size_t>(ip)] -= im;
+    }
+    if (in >= 0) {
+        Breal[static_cast<size_t>(in)] += re;
+        Bimag[static_cast<size_t>(in)] += im;
+    }
+}
+
 void CurrentSource::requestBreakpoints(std::vector<double>& times,
                                        double tstop) const {
     waveform_.breakpoints(times, tstop);

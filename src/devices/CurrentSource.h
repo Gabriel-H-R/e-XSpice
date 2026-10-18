@@ -47,6 +47,14 @@ public:
     // ---------------------------------------------------------------
     void loadB(double time, std::vector<double>& B) const override;
 
+    /**
+     * @brief Small-signal phasor injected into the two nodes (AC analysis).
+     *        A current source has no Jacobian contribution at all: its whole
+     *        effect on the small-signal solution is the right-hand side.
+     */
+    void loadACExcitation(double omega, std::vector<double>& Breal,
+                          std::vector<double>& Bimag) const override;
+
     // ---------------------------------------------------------------
     // Outputs
     // ---------------------------------------------------------------

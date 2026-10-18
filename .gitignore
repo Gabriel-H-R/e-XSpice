@@ -18,3 +18,5 @@ bin/
 
 # Ignorar arquivos de log que podem ser gerados
 *.log
+# Saida padrao do executavel (artefato de execucao)
+simulation_output.csv

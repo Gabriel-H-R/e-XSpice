@@ -18,6 +18,37 @@ using std::log;
 using std::min;
 using std::max;
 
+DiodeModel::DiodeModel(std::string name) : DeviceModel(std::move(name)) {
+    // Card parameter table (canonical first, aliases after — canonical
+    // wins when a card spells both). Adding a parameter = one line here.
+    declareParams({
+        makeParam("IS", &DiodeModel::IS, "saturation current"),
+        makeAlias("JS", &DiodeModel::IS),
+        makeParam("N", &DiodeModel::N, "emission coefficient"),
+        makeParam("RS", &DiodeModel::RS, "ohmic series resistance"),
+        makeParam("CJO", &DiodeModel::CJO, "zero-bias capacitance"),
+        makeAlias("CJ", &DiodeModel::CJO),
+        makeAlias("CJ0", &DiodeModel::CJO),
+        makeParam("VJ", &DiodeModel::VJ, "junction potential"),
+        makeAlias("PB", &DiodeModel::VJ),
+        makeParam("M", &DiodeModel::M, "grading coefficient"),
+        makeParam("FC", &DiodeModel::FC, "forward-bias coefficient"),
+        makeParam("BV", &DiodeModel::BV, "reverse breakdown voltage"),
+        makeAlias("VB", &DiodeModel::BV),
+        makeParam("IBV", &DiodeModel::IBV, "breakdown knee current"),
+        makeParam("NBV", &DiodeModel::NBV, "breakdown emission coefficient"),
+        makeParam("TT", &DiodeModel::TT, "transit time"),
+        makeParam("EG", &DiodeModel::EG, "bandgap voltage"),
+        makeParam("XTI", &DiodeModel::XTI, "saturation-current temp exponent"),
+        makeParam("IKF", &DiodeModel::IKF, "high-injection knee"),
+        makeParam("ISR", &DiodeModel::ISR, "recombination saturation current"),
+        makeParam("NR", &DiodeModel::NR, "recombination emission coefficient"),
+        makeParam("GMIN", &DiodeModel::GMIN, "parallel conductance"),
+        makeCelsiusParam("TNOM", &DiodeModel::TNOM, "reference temperature"),
+        makeCelsiusParam("TEMP", &DiodeModel::TEMP, "card temperature"),
+    });
+}
+
 void DiodeModel::applyGuards() {
     // History-dependent parameter guards (Xyce Model::processParams).
     M  = min(M, 0.9);
@@ -106,44 +137,6 @@ double DiodeModel::fitBreakdown(double Temp, double vt, double isat) const {
         }
     }
     return xbv;
-}
-
-RCP<DeviceModel> DiodeModel::fromCard(const std::string& name,
-                                     const ParamMap& params) {
-    ModelCard card;
-    card.name = name;
-    card.type = "D";
-    card.params = params;
-
-    RCP<DiodeModel> m = make_rcp<DiodeModel>(name);
-    m->IS  = card.get("IS", m->IS);
-    m->IS  = card.get("JS", m->IS);
-    m->N   = card.get("N", m->N);
-    m->RS  = card.get("RS", m->RS);
-    m->CJO = card.get("CJO", m->CJO);
-    m->CJO = card.get("CJ", m->CJO);
-    m->CJO = card.get("CJ0", m->CJO);
-    m->VJ  = card.get("VJ", m->VJ);
-    m->VJ  = card.get("PB", m->VJ);
-    m->M   = card.get("M", m->M);
-    m->FC  = card.get("FC", m->FC);
-    if (card.given("BV") || card.given("VB")) {
-        m->BV = card.get("BV", card.get("VB", m->BV));
-        m->BVGiven = true;
-    }
-    m->IBV = card.get("IBV", m->IBV);
-    m->NBV = card.get("NBV", m->NBV);
-    m->TT  = card.get("TT", m->TT);
-    m->EG  = card.get("EG", m->EG);
-    m->XTI = card.get("XTI", m->XTI);
-    m->IKF = card.get("IKF", m->IKF);
-    m->ISR = card.get("ISR", m->ISR);
-    m->NR  = card.get("NR", m->NR);
-    m->GMIN = card.get("GMIN", m->GMIN);
-    // SPICE writes TNOM/TEMP in Celsius; the card stores Kelvin.
-    if (card.given("TNOM")) m->TNOM = card.get("TNOM", 27.0) + Const::CtoK;
-    if (card.given("TEMP")) m->TEMP = card.get("TEMP", 27.0) + Const::CtoK;
-    return m;
 }
 
 RCP<const DiodeModel> DiodeModel::defaultModel() {

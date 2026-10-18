@@ -122,6 +122,8 @@ public:
 
     void confirmAccept() override;
 
+    void resetIterationState(const DaeSolution& x) override;
+
     // ---------------------------------------------------------------
     // Outputs
     // ---------------------------------------------------------------
@@ -134,6 +136,13 @@ public:
      * @brief Shared model card (observer; owned by registry/creator).
      */
     RCP<const DiodeModel> model() const { return model_; }
+
+    // ---- circuit temperature (`.TEMP`) ----
+    // The diode reads its thermal snapshot through a pointer into the card,
+    // so re-scaling the card is enough: no precomputed scalar to refresh.
+    RCP<const DeviceModel> temperatureCard() const override {
+        return RCP<const DeviceModel>(model_);
+    }
 
     /**
      * @brief Per-instance parameters.

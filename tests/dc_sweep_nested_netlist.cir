@@ -1,0 +1,22 @@
+* ============================================================
+* Nested DC sweep on a CMOS inverter built with level-2 BSIM4.
+*   outer loop : VDD  1.0 -> 3.0 V step 0.5   (5 points)
+*   inner loop : VG   0.0 -> 2.0 V step 0.5   (5 points)
+* -> 25 operating points, two swept columns in the CSV.
+* Exercises: nested .DC + level-2 devices + streamed CSV.
+* ============================================================
+
+.MODEL NMOS2 NMOS2 (LEVEL=2 VTH0=0.45 KP=120e-6 GAMMA=0.4 PHI=0.7 LAMBDA=0.02 U0=0.45 TOX=8e-9 NFS=1e11 VSAT=8e4)
+
+.MODEL PMOS2 PMOS2 (LEVEL=2 VTH0=-0.45 KP=40e-6 GAMMA=0.5 PHI=0.7 LAMBDA=0.03 U0=0.15 TOX=8e-9 NFS=1e11 VSAT=8e4)
+
+VDD  vdd 0 DC 1.0
+VG   vg  0 DC 0.0
+
+MN   vout vg 0 0 NMOS2 W=2u L=0.5u
+MP   vout vg vdd vdd PMOS2 W=4u L=0.5u
+RL   vout 0 1meg          * DC load: keeps vout well posed between the rails
+
+.DC VDD 1.0 3.0 0.5 VG 0.0 2.0 0.5
+
+.END

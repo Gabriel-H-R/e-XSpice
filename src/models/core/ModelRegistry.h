@@ -31,11 +31,13 @@
 namespace e_XSpice {
 
 /**
- * @brief Builds a typed model from a generic card.
+ * @brief Builds a typed model with default parameters.
+ *        The registry fills the card values generically afterwards
+ *        (DeviceModel::applyCardParams), so factories never parse.
  *        Throws std::invalid_argument on invalid parameter combinations.
  */
 using ModelFactory =
-    std::function<RCP<DeviceModel>(const std::string& name, const ParamMap& params)>;
+    std::function<RCP<DeviceModel>(const std::string& name)>;
 
 class ModelRegistry {
 public:
@@ -58,9 +60,17 @@ public:
     bool hasModelType(const std::string& type) const;
 
     /**
-     * @brief Creates a typed model from a card (factory + processParams)
-     *        and stores it. Throws on unknown type, duplicate name, or
-     *        invalid parameters.
+     * @brief Registered model types ("D", "NPN", "NMOS", ...), sorted.
+     *        Used in unknown-type errors so a typo shows what's legal.
+     */
+    std::vector<std::string> registeredTypes() const;
+
+    /**
+     * @brief Creates a typed model from a card (factory + generic parameter
+     *        fill + processParams) and stores it. Throws on unknown type
+     *        (lists registered types), duplicate name, unknown parameter
+     *        (lists the valid parameters of that type), or invalid
+     *        parameter combinations.
      * @return shared handle to the stored model
      */
     RCP<DeviceModel> createModel(const ModelCard& card);

@@ -52,6 +52,14 @@ public:
 
     void loadB(double time, std::vector<double>& B) const override;
 
+    /**
+     * @brief Small-signal phasor on the branch row (AC analysis).
+     *        The KVL constraint itself is already in dF/dx, so only the
+     *        source phasor (mag·e^{j·phase}) enters the right-hand side.
+     */
+    void loadACExcitation(double omega, std::vector<double>& Breal,
+                          std::vector<double>& Bimag) const override;
+
     void loadJacobianF(DaeMatrix& J, const DaeSolution& x,
                        double time) const override;
 

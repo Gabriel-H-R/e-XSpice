@@ -46,10 +46,21 @@ DCResult DCAnalysis::run(bool use_mpi, bool use_initial_guess) {
     system.setVerbose(verbose_);
     system.beginSolve(/*initial_solve=*/true);
 
+    // Warm start: a previous solution on the SAME circuit (same size)
+    // seeds Newton on the already-tracked branch — the honest way to sweep
+    // past bistabilities (each point starts from its converged neighbor
+    // instead of rolling the dice from zero).
+    std::vector<double> x0;
+    if (use_initial_guess && !previous_solution_.empty() &&
+        static_cast<int>(previous_solution_.size()) == system.size()) {
+        x0 = previous_solution_;
+    }
+
     // Sources evaluated at t = 0 (DC value of every waveform).
     const NLSolveResult nl = system.solveNonlinear(/*time=*/0.0,
                                                    /*q_coeff=*/0.0,
-                                                   /*use_history=*/false);
+                                                   /*use_history=*/false,
+                                                   x0);
 
     result.assembly_time = nl.elapsed_seconds;
     result.solve_time = 0.0;
@@ -67,6 +78,9 @@ DCResult DCAnalysis::run(bool use_mpi, bool use_initial_guess) {
     result.solver_result.message = nl.message;
 
     system.extractSolution();
+
+    // Remember this point for the next warm-started run.
+    previous_solution_ = system.solution();
 
     // ---- collect outputs ----
     auto t1 = std::chrono::high_resolution_clock::now();

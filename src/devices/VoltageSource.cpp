@@ -71,6 +71,19 @@ void VoltageSource::loadB(double time, std::vector<double>& B) const {
     B[branch_index_] += waveform_.value(time);
 }
 
+void VoltageSource::loadACExcitation(double omega,
+                                    std::vector<double>& Breal,
+                                    std::vector<double>& Bimag) const {
+    (void)omega;  // a source phasor is frequency independent by definition
+    if (!waveform_.hasAC()) return;       // silent source: no AC excitation
+    const int ib = branch_index_;
+    if (ib < 0 || ib >= static_cast<int>(Breal.size())) return;
+    double re = 0.0, im = 0.0;
+    waveform_.acPhasor(re, im);
+    Breal[static_cast<size_t>(ib)] += re;
+    Bimag[static_cast<size_t>(ib)] += im;
+}
+
 void VoltageSource::loadJacobianF(DaeMatrix& J, const DaeSolution& x,
                                   double time) const {
     (void)x; (void)time;

@@ -1,0 +1,18 @@
+* ============================================================
+* Temperature sweep: `.DC TEMP -40 125 25` (Xyce: the sweep variable may
+* be TEMP, in Celsius).
+* The divider is a copper resistor model (TC1 = 0.0039 /K, TNOM = 27 C),
+* so every point has a closed-form answer:
+*     R(T)  = 1k * (1 + 0.0039*(T - 27))
+*     Vout  = 10 * R(T) / (R(T) + 1k)
+* ============================================================
+
+.MODEL RCU R (R=1 TC1=0.0039 TNOM=27)
+
+V1 in 0 DC 10
+RT in out RCU 1k
+RL out 0 1k
+
+.DC TEMP -40 125 25
+
+.END

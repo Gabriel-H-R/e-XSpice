@@ -235,11 +235,36 @@ public:
     bool isCurrentUnknown(int row) const { return row >= num_nodes_; }
 
     /**
-     * @brief Debug access to the last assembled Jacobian (dFdx).
+     * @brief Debug access to the last assembled Jacobians.
+     *
+     * jacobianF() is dF/dx and jacobianQ() is dQ/dx, both evaluated at the
+     * point of the last assembly. They SHARE the same sparsity pattern, so
+     * the AC analysis reads them as the (G, C) pair of
+     *     (dF/dx + j·w·dQ/dx)·X = B_ac
+     * without copying the matrix objects.
      */
     const DaeMatrix& jacobianF() const { return jac_f_; }
+    const DaeMatrix& jacobianQ() const { return jac_q_; }
     const std::vector<double>& residualF() const { return F_; }
     const std::vector<double>& rhs() const { return rhs_; }
+
+    /**
+     * @brief Re-assembles dF/dx and dQ/dx at the CURRENT solution.
+     *
+     * After a converged Newton solve the Jacobians in memory belong to the
+     * previous iterate (the solver returns as soon as the residual at the
+     * updated point is acceptable). The AC analysis needs the linearization
+     * AT the operating point, so it calls this once before snapshotting
+     * (G, C): one extra O(nnz) pass, instead of a stale linearization whose
+     * error would show up in every reported magnitude and phase.
+     *
+     * @param include_gmin  the homotopy gmin is a DC convergence aid, not
+     *        device physics. The AC analysis passes false (a 1e-12 diagonal is
+     *        a trap for any no-pivot ordering and perturbs the small-signal
+     *        answer); a caller that wants to reproduce the Newton matrix
+     *        passes true.
+     */
+    void refreshLinearization(bool include_gmin = false);
 
     /**
      * @brief Lightweight linear-solve statistics (performance transparency).
@@ -303,7 +328,10 @@ private:
     void assembleVectors(double time, double q_coeff);
     void assembleJacobians(double time, double q_coeff);
     void buildRHS(double q_coeff, bool use_history);
-    bool checkConvergence(const std::vector<double>& x_new) const;
+    bool checkUpdateConverged(const std::vector<double>& x_new) const;
+    bool checkResidualConverged(double q_coeff) const;
+    bool checkDevicesAccept() const;
+    void dampNewtonStep(std::vector<double>& dx, double trust) const;
     bool solveLinearSystem(std::vector<double>& dx);
     void applyGminResidual();
     void applyGminDiagonal();
@@ -314,6 +342,21 @@ private:
     void applySolutionLimits();        // limiting write-back (serial only)
     bool ownsDevice(size_t i) const { return plan_.ownsDevice(static_cast<int>(i)); }
     double currentTime_ = 0.0;
+
+    // Trust-region cap on a single Newton step (volts or amps; anything
+    // larger is a near-singular direction, never legitimate progress).
+    static constexpr double MaxNewtonStep_ = 100.0;
+    // Floor of the adaptive trust region (see attempt()): steps this small
+    // with a non-shrinking residual mean Newton cannot progress at this
+    // homotopy level — the iteration budget then hands off to the next
+    // gmin level or the dt-cut retry.
+    static constexpr double MinNewtonStep_ = 1e-3;
+
+    // At or below this system size the linear system goes straight to the
+    // direct solver (see solveLinearSystem): exact, deterministic, and
+    // cheaper than Krylov for small Jacobians. Above it Krylov leads with
+    // a direct fallback (up to the 20000-row hard fallback limit below).
+    static constexpr int DirectSolveMaxRows_ = 2000;
 };
 
 } // namespace e_XSpice

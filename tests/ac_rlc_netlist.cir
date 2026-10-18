@@ -1,0 +1,11 @@
+* AC analysis on an MNA circuit (source + inductor + resistor).
+* Node `in` has NO self-term in its KCL row (i(V1) + i(L1) = 0): the case that
+* needs a pivot-safe ordering in the small-signal matrix.
+* Output across R1 (V1 -> L1 -> R1 -> gnd): |H| = R / |R + jwL|,
+* phase = -atan(wL/R), with L = 1 mH and R = 1 ohm.
+*
+V1 in 0 DC 0 AC 1
+L1 in out 1e-3
+R1 out 0 1
+.AC DEC 10 100 1e6
+.END

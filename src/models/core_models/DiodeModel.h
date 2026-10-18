@@ -58,6 +58,10 @@ struct DiodeThermal {
 
 /**
  * @brief Per-instance diode parameters (one netlist line).
+ *
+ * Declares its own option table (same machinery as card parameters):
+ * the parser fills it generically, so new instance options never touch
+ * parser code. Range validation stays in the Diode constructor.
  */
 struct DiodeInstanceParams {
     double AREA = 1.0;   // area multiplier
@@ -65,11 +69,27 @@ struct DiodeInstanceParams {
     double TEMP = 0.0;   // instance temperature (Kelvin, when TEMPGiven)
     double DTEMP = 0.0;  // delta temperature (K)
     bool   TEMPGiven = false;
+
+    using Table = std::vector<TypedParamDesc<DiodeInstanceParams>>;
+    static const Table& paramTable() {
+        static const Table t = {
+            makeParam("AREA", &DiodeInstanceParams::AREA,
+                      "area multiplier"),
+            makeParam("M", &DiodeInstanceParams::M,
+                      "multiplicity (parallel devices)"),
+            makeCelsiusParam("TEMP", &DiodeInstanceParams::TEMP,
+                             "instance temperature",
+                             [](DiodeInstanceParams& o) { o.TEMPGiven = true; }),
+            makeParam("DTEMP", &DiodeInstanceParams::DTEMP,
+                      "delta temperature (K)"),
+        };
+        return t;
+    }
 };
 
 class DiodeModel : public DeviceModel {
 public:
-    explicit DiodeModel(std::string name) : DeviceModel(std::move(name)) {}
+    explicit DiodeModel(std::string name);
 
     std::string typeName() const override { return "D"; }
 
@@ -118,18 +138,18 @@ public:
     const DiodeThermal& thermal() const { return thermal_; }
 
     /**
-     * @brief Builds a card from netlist key=value pairs. TNOM/TEMP arrive
-     *        in CELSIUS (SPICE convention) and are stored Kelvin.
-     *        Recognized aliases: JS→IS, CJ/CJ0→CJO, PB→VJ, VB→BV (+BVGiven).
-     */
-    static RCP<DeviceModel> fromCard(const std::string& name,
-                                     const ParamMap& params);
-
-    /**
      * @brief Process-wide default model (SPICE defaults). Shared,
      *        never modified after first use.
      */
     static RCP<const DiodeModel> defaultModel();
+
+protected:
+    /**
+     * @brief Tracks BVGiven under either spelling ("BV" or "VB").
+     */
+    void onParamGiven(const std::string& key) override {
+        if (key == "BV" || key == "VB") BVGiven = true;
+    }
 
 private:
     DiodeThermal thermal_;

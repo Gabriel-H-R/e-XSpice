@@ -66,6 +66,35 @@ public:
     // Getters
     double getResistance() const { return resistance_; }
     double getConductance() const { return conductance_; }
+
+    // ---- circuit temperature (`.TEMP`) ----
+    RCP<const DeviceModel> temperatureCard() const override {
+        return RCP<const DeviceModel>(model_);
+    }
+
+    /**
+     * @brief Re-folds the card's TC1/TC2/Rmult at the new temperature.
+     *        This is what makes R(T) live under `.TEMP`: the constructor
+     *        folds the factor at TNOM, a temperature change folds it at T.
+     */
+    void setCircuitTemperature(double kelvin) override;
+
+    /**
+     * @brief Effective resistance (Ω) at the card's TNOM.
+     *
+     * This is the value a .DC sweep sets: it is the SAME number the
+     * constructor folded the shared card into, so a swept resistance
+     * behaves exactly like a netlist value at the reference temperature.
+     */
+    double getEffectiveResistance() const;
+
+    /**
+     * @brief DC sweep hook (Xyce `.DC R1 <start> <stop> <step>`): changes the
+     *        effective resistance and re-derives the conductance in place.
+     *        Values <= 0 are clamped to a near short (1e-12 Ω) instead of
+     *        throwing, so a degenerate sweep range does not abort.
+     */
+    void setEffectiveResistance(double ohms);
     Node*  getNodePlus()   const { return nodes_[0]; }
     Node*  getNodeMinus()  const { return nodes_[1]; }
     RCP<const ResistorModel> model() const { return model_; }

@@ -118,6 +118,21 @@ Mosfet::~Mosfet() {
     delete bsim4Device_;
 }
 
+// ===============================================================
+// CIRCUIT TEMPERATURE (`.TEMP`)
+// ===============================================================
+
+void Mosfet::setCircuitTemperature(double kelvin) {
+    (void)kelvin;
+    // BSIM4 level-2 evaluates its own geometry and thermal quantities
+    // inside evaluate() (it reads the card snapshot live), so nothing to
+    // refresh. Level-1 precomputed cox at construction time.
+    if (bsim4Device_ || inst_.TEMPGiven) return;
+    auto card = level1Model();
+    if (!card) return;
+    cox_ = thermal_->coxPrime * inst_.W * leff_ * inst_.M;
+}
+
 RCP<Mosfet> Mosfet::makeNmos(const std::string& name, Node* drain,
                              Node* gate, Node* source, Node* bulk) {
     return make_rcp<Mosfet>(name, drain, gate, source, bulk,
@@ -436,13 +451,13 @@ void Mosfet::loadF(const DaeSolution& x, double time,
     // BSIM4 level-2 path: evaluate in the device (its own limited
     // voltages), then pull the results into this wrapper's members.
     if (bsim4Device_) {
-        bsim4Device_->limitedVoltages(x, rowOf(nodes_[0]), rowOf(nodes_[1]),
-                                    rowOf(nodes_[2]), rowOf(nodes_[3]),
-                                    true);
+        const int r[4] = {rowOf(nodes_[0]), rowOf(nodes_[1]),
+                          rowOf(nodes_[2]), rowOf(nodes_[3])};
+        bsim4Device_->limitedVoltages(x, r[0], r[1], r[2], r[3], true);
         bsim4Device_->evaluate(bsim4Device_->vgsLim(),
                                bsim4Device_->vdsLim(),
                                bsim4Device_->vbsLim());
-        bsim4Device_->loadF(F);
+        bsim4Device_->loadF(F, r[0], r[1], r[2], r[3]);
         pullBSIM4();
         bsim4Device_->commitLimited();
         first_solve_ = false;
@@ -510,13 +525,13 @@ void Mosfet::loadQ(const DaeSolution& x, double time,
     (void)time;
     // BSIM4 level-2 path
     if (bsim4Device_) {
-        bsim4Device_->limitedVoltages(x, rowOf(nodes_[0]), rowOf(nodes_[1]),
-                                    rowOf(nodes_[2]), rowOf(nodes_[3]),
-                                    true);
+        const int r[4] = {rowOf(nodes_[0]), rowOf(nodes_[1]),
+                          rowOf(nodes_[2]), rowOf(nodes_[3])};
+        bsim4Device_->limitedVoltages(x, r[0], r[1], r[2], r[3], true);
         bsim4Device_->evaluate(bsim4Device_->vgsLim(),
                                bsim4Device_->vdsLim(),
                                bsim4Device_->vbsLim());
-        bsim4Device_->loadQ(Q);
+        bsim4Device_->loadQ(Q, r[0], r[1], r[2], r[3]);
         pullBSIM4();
         bsim4Device_->commitLimited();
         first_solve_ = false;

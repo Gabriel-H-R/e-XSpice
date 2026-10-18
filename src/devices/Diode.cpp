@@ -278,13 +278,20 @@ void Diode::applySolutionLimit(std::vector<double>& x) const {
 
     // SPICE-style limiting write-back: the next Newton iteration restarts
     // from the limited junction voltage, anchored on the cathode (the
-    // cathode row is never the limited one). With RS = 0 the Pri row IS the
-    // anode row, so a single write covers both cases; a grounded anode has
-    // no row at all (ir < 0) and nothing to write.
+    // cathode row is never the limited one). The anode side is shifted by
+    // the SAME delta on both the Pri row and the external anode row, so a
+    // series RS carries exactly its evaluated current into the next
+    // iteration (no artificial RS residual — see Bjt::applySolutionLimit).
+    // With RS = 0 the Pri row IS the anode row, so a single write covers
+    // both cases; a grounded anode has no row at all (ir < 0).
     const int in = rowOf(nodes_[1]);
     const int ir = priRow();
+    const int ip = rowOf(nodes_[0]);
     if (ir >= 0) {
-        x[ir] = (in >= 0) ? x[in] + vd_limited_ : vd_limited_;
+        const double updated = (in >= 0) ? x[in] + vd_limited_ : vd_limited_;
+        const double delta = updated - x[ir];
+        x[ir] = updated;
+        if (ip >= 0 && ip != ir) x[ip] += delta;
     }
 }
 
@@ -356,6 +363,18 @@ bool Diode::acceptSolution() const {
     // Newton iteration is only accepted when no limiter intervened
     // (Xyce: origFlag = false → isConverged() == false).
     return !limiting_active_;
+}
+
+void Diode::resetIterationState(const DaeSolution& x) {
+    // Re-anchor the limiter history to the RAW junction voltage at the
+    // restored point (no evaluation: the next assembly re-evaluates before
+    // using any cache). pnjlim(raw, raw) cannot misfire.
+    limiting_active_ = false;
+    const int ir = priRow();
+    const int in = rowOf(nodes_[1]);
+    const double vpp = (ir >= 0) ? x.data()[ir] : 0.0;
+    const double vn = (in >= 0) ? x.data()[in] : 0.0;
+    vd_prev_ = vpp - vn;
 }
 
 void Diode::confirmAccept() {

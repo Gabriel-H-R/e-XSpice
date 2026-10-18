@@ -6,7 +6,9 @@
 
 #include "Circuit.h"
 #include "../devices/VoltageSource.h"
+#include "../models/core/DeviceModel.h"
 #include <iostream>
+#include <stdexcept>
 #include <iomanip>
 #include <algorithm>
 
@@ -80,6 +82,55 @@ void Circuit::addDevice(RCP<Device> device) {
 
     devices_.push_back(device);
     device_map_[device->getName()] = std::move(device);
+
+    // A new device may bring a new card: the temperature card list is
+    // rebuilt on the next setTemperature() call.
+    temperature_cards_dirty_ = true;
+}
+
+// ===============================================================
+// CIRCUIT TEMPERATURE (SPICE `.TEMP`, `.DC TEMP ...`)
+// ===============================================================
+
+void Circuit::setTemperature(double kelvin) {
+    // Idempotent by construction: a temperature sweep that repeats a value
+    // (or re-applies the netlist value) costs nothing, and the card list is
+    // only rebuilt when devices changed since the last application.
+    if (!(kelvin > 0.0)) {
+        throw std::invalid_argument("Circuit temperature must be positive (Kelvin)");
+    }
+    if (temperature_given_ && kelvin == temperature_) {
+        return;
+    }
+
+    if (temperature_cards_dirty_ || !temperature_cards_scanned_) {
+        temperature_cards_.clear();
+        temperature_cards_.reserve(devices_.size());
+        for (const auto& d : devices_) {
+            const RCP<const DeviceModel> card = d->temperatureCard();
+            const DeviceModel* raw = card.get();
+            if (raw == nullptr) continue;
+            if (std::find(temperature_cards_.begin(), temperature_cards_.end(),
+                          raw) == temperature_cards_.end()) {
+                temperature_cards_.push_back(raw);
+            }
+        }
+        temperature_cards_dirty_ = false;
+        temperature_cards_scanned_ = true;
+    }
+
+    // Cards first: devices that precompute temperature scalars read the
+    // freshly scaled snapshot right after. The const_cast is deliberate —
+    // see the comment on temperature_cards_.
+    for (const DeviceModel* card : temperature_cards_) {
+        const_cast<DeviceModel*>(card)->setOperatingTemperature(kelvin);
+    }
+    for (const auto& d : devices_) {
+        d->setCircuitTemperature(kelvin);
+    }
+
+    temperature_ = kelvin;
+    temperature_given_ = true;
 }
 
 Device* Circuit::getDevice(const std::string& name) {

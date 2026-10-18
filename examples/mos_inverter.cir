@@ -1,0 +1,20 @@
+* CMOS inverter (NMOS + PMOS level 1, Shichman-Hodges + Meyer charges)
+* ------------------------------------------------------------------
+* One shared card per polarity. The 1 pF load slows the output
+* (C*V/I ~= 3 ns) so the 10 ns input edge is resolved instead of jumped
+* over in a single step; overlap + bulk caps exercise the full Meyer and
+* depletion charge code.
+* ------------------------------------------------------------------
+
+.MODEL NI NMOS (VTO=1 KP=2e-5 CGSO=4e-10 CGDO=4e-10 CBS=20f CBD=20f)
+.MODEL PI PMOS (VTO=-1 KP=2e-5 CGSO=4e-10 CGDO=4e-10 CBS=20f CBD=20f)
+
+VDD 1 0 DC 5
+VIN in 0 PULSE(0 5 1u 10n 10n 2u 4u)
+M1 out in 0 0 NI W=100u L=10u
+M2 out in 1 1 PI W=100u L=10u
+CL out 0 1p
+
+.OP
+.TRAN 2n 4u 0
+.END

@@ -151,6 +151,60 @@ static void test_registry() {
         checkTrue("R card found as R",
                   (bool)reg.findAs<ResistorModel>("X1"));
     }
+
+    // Unknown keys fail with the valid list (typo safety, SPICE-style).
+    {
+        bool typo = false;
+        std::string what;
+        try {
+            ModelCard c;
+            c.name = "TYPO";
+            c.type = "D";
+            c.params["IS"] = 1e-14;
+            c.params["BTEA"] = 100.0;   // typo'd: no such diode parameter
+            reg.createModel(c);
+        } catch (const std::exception& e) {
+            typo = true;
+            what = e.what();
+        }
+        checkTrue("typo'd parameter rejected", typo);
+        checkTrue("error names the bad key",
+                  what.find("BTEA") != std::string::npos);
+        checkTrue("error lists valid parameters",
+                  what.find("BF") == std::string::npos &&   // not a diode key
+                  what.find("IS") != std::string::npos);
+    }
+
+    // Introspection: registered types + declared tables.
+    {
+        const std::vector<std::string> types = reg.registeredTypes();
+        bool hasD = false, hasNPN = false, hasNMOS = false;
+        for (const auto& t : types) {
+            hasD = hasD || t == "D";
+            hasNPN = hasNPN || t == "NPN";
+            hasNMOS = hasNMOS || t == "NMOS";
+        }
+        checkTrue("registeredTypes lists D", hasD);
+        checkTrue("registeredTypes lists NPN", hasNPN);
+        checkTrue("registeredTypes lists NMOS", hasNMOS);
+
+        RCP<const DiodeModel> d = reg.findAs<DiodeModel>("A");
+        checkTrue("declared table is non-empty", !d->paramTable().empty());
+        checkTrue("table knows IS", d->hasParam("IS"));
+        checkTrue("table knows alias JS", d->hasParam("JS"));
+        checkTrue("table rejects BTEA", !d->hasParam("BTEA"));
+
+        // Canonical spelling wins when both spellings are present.
+        ModelCard c;
+        c.name = "PRE";
+        c.type = "D";
+        c.params["IS"] = 1e-14;
+        c.params["JS"] = 2e-14;
+        RCP<DeviceModel> base = reg.createModel(c);
+        RCP<const DiodeModel> pre = reg.findAs<DiodeModel>("PRE");
+        (void)base;
+        check("canonical IS wins over JS", pre->IS, 1e-14, 0.0);
+    }
 }
 
 static void test_aliases() {
@@ -354,6 +408,74 @@ static void test_parser_errors() {
     }
 }
 
+static void test_instance_options() {
+    std::printf("\n9) Instance options (generic tail parser)\n");
+
+    // Tables are introspectable, like card tables.
+    checkTrue("diode instance table has AREA",
+              DiodeInstanceParams::paramTable().size() >= 4);
+    {
+        bool hasTemp = false;
+        for (const auto& d : DiodeInstanceParams::paramTable()) {
+            if (d.name == "TEMP") hasTemp = true;
+        }
+        checkTrue("diode instance table has TEMP", hasTemp);
+    }
+
+    // Unknown instance options fail with the valid list (was: silently
+    // ignored — e.g. a misspelled AREA= never took effect).
+    {
+        Circuit c("io1");
+        NetlistParser p;
+        std::string what;
+        const bool ok = p.parseString(
+            ".MODEL DM D (IS=1e-14)\nD1 1 0 DM AREA=2 ARER=3\n.OP\n.END\n", c);
+        checkTrue("unknown instance option rejected", !ok);
+        what = p.getErrorMessage();
+        checkTrue("error lists valid instance options",
+                  what.find("AREA") != std::string::npos);
+    }
+    {
+        Circuit c("io2");
+        NetlistParser p;
+        const bool ok = p.parseString(
+            ".MODEL QM NPN (IS=1e-16 BF=100)\nQ1 1 2 0 QM FOO=1\n.END\n", c);
+        checkTrue("unknown BJT option rejected", !ok);
+    }
+    {
+        Circuit c("io3");
+        NetlistParser p;
+        const bool ok = p.parseString(
+            ".MODEL MM NMOS (VTO=1 KP=2e-5)\nM1 1 2 0 0 MM WXYZ=1\n.END\n", c);
+        checkTrue("unknown MOSFET option rejected", !ok);
+    }
+
+    // TEMP= on the line lands in Kelvin with TEMPGiven set (generic path).
+    {
+        Circuit c("io4");
+        NetlistParser p;
+        const bool ok = p.parseString(
+            ".MODEL DM D (IS=1e-14)\nD1 1 0 DM TEMP=50\n.OP\n.END\n", c);
+        checkTrue("TEMP option parses", ok);
+        if (ok) {
+            Diode* d = static_cast<Diode*>(c.getDevice("D1"));
+            checkTrue("TEMPGiven set via table hook",
+                      d->instanceParams().TEMPGiven);
+            check("TEMP stored Kelvin", d->instanceParams().TEMP,
+                  50.0 + 273.15, 1e-9);
+        }
+    }
+
+    // Malformed (KEY without =) still fails cleanly.
+    {
+        Circuit c("io5");
+        NetlistParser p;
+        const bool ok = p.parseString(
+            ".MODEL DM D (IS=1e-14)\nD1 1 0 DM AREA\n.OP\n.END\n", c);
+        checkTrue("bare KEY rejected", !ok);
+    }
+}
+
 static void test_default_and_override() {
     std::printf("\n8) Default model + programmatic cards\n");
     {
@@ -388,6 +510,7 @@ int main(int argc, char** argv) {
     test_resistor_model();
     test_parser_errors();
     test_default_and_override();
+    test_instance_options();
 
     std::printf("\n=== %s (%d failure%s) ===\n",
                 g_failures == 0 ? "ALL CHECKS PASSED" : "CHECKS FAILED",

@@ -1,0 +1,8 @@
+* AC analysis smoke test: RC low-pass (R1 = 1k, C1 = 1n -> fc = 159.15 kHz)
+* Analytic reference: |H| = 1/sqrt(1+(wRC)^2), phase = -atan(wRC)
+*
+V1 in 0 DC 0 AC 1
+R1 in out 1k
+C1 out 0 1n
+.AC DEC 2 10 1Meg
+.END

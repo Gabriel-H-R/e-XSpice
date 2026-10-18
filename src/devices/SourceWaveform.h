@@ -127,9 +127,45 @@ public:
 
     WaveformType type() const { return type_; }
 
+    // ---------------- AC (small-signal) specification ----------------
+    //
+    // SPICE gives every source TWO independent specs:
+    //     V1 n+ n- DC <value>          -> the DC operating point
+    //     V1 n+ n- AC <mag> [phase]    -> the small-signal phasor for .AC
+    // The DC waveform above is the time-domain spec; the phasor lives here,
+    // next to it, so the device carries both without extra state (exactly
+    // what Xyce stores per-source: a DC/B vector plus the AC magnitude and
+    // phase read from the netlist).
+    //
+    // SPICE semantics implemented here:
+    //   - "AC mag" without a time spec implies DC 0 (the source contributes
+    //     nothing to the operating point),
+    //   - phase is in DEGREES and defaults to 0,
+    //   - a source with no AC spec is silent in an AC analysis.
+
+    /** @brief Sets the small-signal phasor (mag, phase in degrees). */
+    void setAC(double mag, double phase_deg) {
+        ac_magnitude_ = mag;
+        ac_phase_rad_ = phase_deg * kPi / 180.0;
+        ac_given_ = true;
+    }
+
+    bool  hasAC() const { return ac_given_; }
+    double acMagnitude() const { return ac_magnitude_; }
+    double acPhaseRad() const { return ac_phase_rad_; }
+
+    /** @brief Phasor as (cos, sin) — the real/imag parts the AC RHS needs. */
+    void acPhasor(double& re, double& im) const {
+        re = ac_magnitude_ * std::cos(ac_phase_rad_);
+        im = ac_magnitude_ * std::sin(ac_phase_rad_);
+    }
+
 private:
     WaveformType type_;
     double dc_value_ = 0.0;
+    double ac_magnitude_ = 1.0;
+    double ac_phase_rad_ = 0.0;
+    bool   ac_given_ = false;
 
     struct Pulse { double v1, v2, td, tr, tf, pw, per; } p_{};
     struct Sin   { double v0, va, freq, td, theta, phase; } s_{};

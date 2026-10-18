@@ -1,0 +1,17 @@
+* ============================================================
+* DC sweep of a diode clipper (Xyce Users' Guide 1.4 example)
+* Sweeps VIN from -10 V to 15 V in 1 V steps: 26 operating points.
+* Exercises: non-linear device + continuation chain + streamed CSV.
+* ============================================================
+
+.MODEL DMOD D (IS=1e-14 N=1.2 RS=0.5 CJO=0 VJ=0.7 BV=20)
+
+VIN in 0 DC 0
+R1  in out 1k
+D1  out 0 DMOD
+
+.DC VIN -10 15 1
+
+.OPTIONS MAXITERS=250 RETRY=4
+
+.END

@@ -161,6 +161,17 @@ public:
 
     static void setDebug(bool on) { debug_ = on; }
 
+    // ---- circuit temperature (`.TEMP`) ----
+    RCP<const DeviceModel> temperatureCard() const override { return model_; }
+
+    /**
+     * @brief Re-derives the setup-time scalars that depend on the card's
+     *        thermal snapshot (cox). The card itself is re-scaled by
+     *        Circuit::setTemperature(); only the values this device
+     *        precomputed for the hot path are refreshed here.
+     */
+    void setCircuitTemperature(double kelvin) override;
+
 private:
     RCP<const DeviceModel> model_;
     MosfetInstanceParams   inst_;

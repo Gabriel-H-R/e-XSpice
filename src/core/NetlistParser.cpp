@@ -209,6 +209,12 @@ bool NetlistParser::parseResistor(const std::vector<std::string>& tokens, Circui
         return false;
     }
 
+    // Trailing card name (`R1 n+ n- <value> <model>`), the Xyce/ngspice
+    // spelling; the card-before-value form above is the other accepted one.
+    if (!model && tokens.size() > value_at + 1) {
+        model = models_.findAs<ResistorModel>(tokens[value_at + 1]);
+    }
+
     if (value <= 0) {
         setError("Resistor value must be positive");
         return false;
@@ -656,17 +662,41 @@ bool NetlistParser::parseSourceSpec(const std::vector<std::string>& tokens,
                                     SourceWaveform& waveform,
                                     Circuit& circuit) {
     (void)circuit;
-    const std::string kw = toUpper(tokens[first_param]);
-    std::vector<double> p = collectNumbers(tokens, first_param + 1);
 
-    if (kw == "DC" || kw == "AC") {
+    // SPICE gives a source TWO independent specs on the same line:
+    //     V1 n+ n- DC 5              -> DC operating point value
+    //     V1 n+ n- AC 1 90           -> small-signal phasor for .AC
+    //     V1 n+ n- PULSE(0 5 1m) AC 1
+    // and "AC mag" alone means DC 0 (the source only excites small signal).
+    // The time-domain part is parsed first; an optional trailing "AC mag
+    // [phase]" is then attached to the same waveform.
+    size_t i = first_param;
+    std::string kw = toUpper(tokens[i]);
+
+    if (kw == "AC") {
+        // AC-only source: no DC contribution to the operating point.
+        waveform = SourceWaveform::dc(0.0);
+        ++i;
+        return parseACSpec(tokens, i, waveform);
+    }
+
+    if (kw == "DC") {
+        std::vector<double> p = collectNumbers(tokens, i + 1);
         if (p.empty()) {
-            setError("DC/AC source requires a value");
+            setError("DC source requires a value");
             return false;
         }
         waveform = SourceWaveform::dc(p[0]);
+        i = first_param + 2;   // consumed "DC <value>"
+        // Anything after may still be the AC spec.
+        for (size_t k = i; k < tokens.size(); ++k) {
+            if (toUpper(tokens[k]) == "AC") return parseACSpec(tokens, k + 1, waveform);
+        }
         return true;
     }
+
+    // Time-domain waveforms: PULSE / SIN / PWL (numbers follow the keyword).
+    std::vector<double> p = collectNumbers(tokens, i + 1);
     if (kw == "PULSE") {
         if (p.size() < 2) {
             setError("PULSE requires at least V1 V2");
@@ -679,9 +709,7 @@ bool NetlistParser::parseSourceSpec(const std::vector<std::string>& tokens,
         const double pw = p.size() > 5 ? p[5] : 0.0;
         const double per = p.size() > 6 ? p[6] : 0.0;
         waveform = SourceWaveform::pulse(v1, v2, td, tr, tf, pw, per);
-        return true;
-    }
-    if (kw == "SIN") {
+    } else if (kw == "SIN") {
         if (p.size() < 3) {
             setError("SIN requires VO VA FREQ");
             return false;
@@ -691,23 +719,41 @@ bool NetlistParser::parseSourceSpec(const std::vector<std::string>& tokens,
         const double theta = p.size() > 4 ? p[4] : 0.0;
         const double phase = p.size() > 5 ? p[5] : 0.0;
         waveform = SourceWaveform::sin(v0, va, freq, td, theta, phase);
-        return true;
-    }
-    if (kw == "PWL") {
+    } else if (kw == "PWL") {
         if (p.size() < 2 || (p.size() % 2) != 0) {
             setError("PWL requires (t1 v1 t2 v2 ...)");
             return false;
         }
-        std::vector<std::pair<double,double>> pts;
-        for (size_t i = 0; i + 1 < p.size(); i += 2) {
-            pts.emplace_back(p[i], p[i + 1]);
+        std::vector<std::pair<double, double>> pts;
+        for (size_t k = 0; k + 1 < p.size(); k += 2) {
+            pts.emplace_back(p[k], p[k + 1]);
         }
         waveform = SourceWaveform::pwl(std::move(pts));
-        return true;
+    } else {
+        setError("Unsupported source specification: " + kw);
+        return false;
     }
-    
-    setError("Unsupported source specification: " + kw);
-    return false;
+
+    // Trailing AC spec on a time-domain source (allowed by SPICE; the AC
+    // analysis ignores the waveform and uses only the phasor).
+    for (size_t k = i + 1; k < tokens.size(); ++k) {
+        if (toUpper(tokens[k]) == "AC") return parseACSpec(tokens, k + 1, waveform);
+    }
+    return true;
+}
+
+bool NetlistParser::parseACSpec(const std::vector<std::string>& tokens,
+                                size_t from,
+                                SourceWaveform& waveform) {
+    const std::vector<double> p = collectNumbers(tokens, from);
+    if (p.empty()) {
+        setError("AC source specification requires a magnitude");
+        return false;
+    }
+    const double mag   = p[0];
+    const double phase = (p.size() > 1) ? p[1] : 0.0;   // degrees, SPICE
+    waveform.setAC(mag, phase);
+    return true;
 }
 
 std::vector<double> NetlistParser::collectNumbers(const std::vector<std::string>& tokens,
@@ -754,16 +800,171 @@ bool NetlistParser::parseCommand(const std::vector<std::string>& tokens) {
             std::cout << "  Analysis: Transient (" << analysis_params_.tran_tstep 
                       << "s to " << analysis_params_.tran_tstop << "s)" << std::endl;
         }
+    } else if (cmd == ".DC") {
+        // Xyce 7.8 §2.1.3:
+        //   .DC [LIN|DEC|OCT] <var> <start> <stop> <step|points>
+        //          [[LIN|DEC|OCT] <var> <start> <stop> <step|points>]
+        // LIN is the default when the keyword is omitted (.DC VIN -10 15 1);
+        // for DEC/OCT the last field is points-per-decade/octave. The second
+        // (optional) specification is the INNER loop (Xyce allows two levels).
+        std::string variation[2];
+        std::string source[2];
+        double vstart[2] = {0.0, 0.0};
+        double vstop[2]  = {0.0, 0.0};
+        double vstep[2]  = {0.0, 0.0};
+        int level = 0;
+        size_t i = 1;
+        while (level < 2 && i < tokens.size()) {
+            std::string var = "LIN";
+            const std::string kw = toUpper(tokens[i]);
+            if (kw == "LIN" || kw == "DEC" || kw == "OCT") {
+                var = kw;
+                ++i;
+            }
+            if (tokens.size() < i + 4) {
+                setError(".DC requires: .DC [LIN|DEC|OCT] <source> "
+                         "<start> <stop> <step|points>");
+                return false;
+            }
+            variation[level] = var;
+            source[level]    = tokens[i];
+            vstart[level]    = parseValue(tokens[i + 1]);
+            vstop[level]     = parseValue(tokens[i + 2]);
+            vstep[level]     = parseValue(tokens[i + 3]);
+            i += 4;
+            ++level;
+        }
+        if (i < tokens.size()) {
+            setError(".DC accepts at most two sweep specifications "
+                     "(nested sweeps go one level deep)");
+            return false;
+        }
+
+        analysis_params_.type = AnalysisType::DC_SWEEP;
+        analysis_params_.want_dc_sweep = true;
+        analysis_params_.dc_variation = variation[0];
+        analysis_params_.dc_source    = source[0];
+        analysis_params_.dc_start     = vstart[0];
+        analysis_params_.dc_stop      = vstop[0];
+        analysis_params_.dc_step      = vstep[0];
+        analysis_params_.dc_nested      = (level > 1);
+        analysis_params_.dc_variation2  = (level > 1) ? variation[1] : "LIN";
+        analysis_params_.dc_source2     = (level > 1) ? source[1]    : "";
+        analysis_params_.dc_start2      = (level > 1) ? vstart[1]    : 0.0;
+        analysis_params_.dc_stop2       = (level > 1) ? vstop[1]     : 0.0;
+        analysis_params_.dc_step2       = (level > 1) ? vstep[1]     : 0.0;
+        if (verbose_) {
+            std::cout << "  Analysis: DC sweep " << variation[0] << " "
+                      << source[0] << " from " << vstart[0] << " to "
+                      << vstop[0];
+            if (level > 1) {
+                std::cout << ", nested " << variation[1] << " " << source[1]
+                          << " from " << vstart[1] << " to " << vstop[1];
+            }
+            std::cout << std::endl;
+        }
+    } else if (cmd == ".TEMP") {
+        // .TEMP <celsius> — circuit operating temperature (SPICE: applies to
+        // every card that did not pin its own TEMP=).
+        if (tokens.size() < 2) {
+            setError(".TEMP requires a temperature in Celsius: .TEMP <t>");
+            return false;
+        }
+        double t = 0.0;
+        if (!parseTemperature(tokens[1], t)) {
+            setError(".TEMP: cannot parse temperature '" + tokens[1] + "'");
+            return false;
+        }
+        if (t < -273.15) {
+            setError(".TEMP: below absolute zero");
+            return false;
+        }
+        analysis_params_.temp_given = true;
+        analysis_params_.temp_value = t;
+        if (verbose_) {
+            std::cout << "  Circuit temperature: " << t << " C" << std::endl;
+        }
+    } else if (cmd == ".OPTIONS" || cmd == ".OPTION") {
+        // Solver/sweep options. Unknown tokens warn instead of failing, so a
+        // netlist written for another simulator still runs here.
+        for (size_t k = 1; k < tokens.size(); ++k) {
+            const std::string opt = toUpper(tokens[k]);
+            const std::string body = opt.substr(0, opt.find('='));
+            const std::string value = (opt.find('=') != std::string::npos)
+                                    ? opt.substr(opt.find('=') + 1) : "";
+            if (body == "NOFAIL") {
+                // Keep the sweep going past a non-converged point (the row
+                // is flagged and holds the last converged solution).
+                analysis_params_.opt_nofail = true;
+            } else if (body == "RETRY" || body == "MAXRETRY") {
+                if (value.empty()) {
+                    setError(".OPTIONS RETRY=<n> requires a value");
+                    return false;
+                }
+                analysis_params_.opt_max_retries = std::max(0, std::stoi(value));
+            } else if (body == "MAXITERS" || body == "ITL4") {
+                if (value.empty()) {
+                    setError(".OPTIONS MAXITERS=<n> requires a value");
+                    return false;
+                }
+                analysis_params_.opt_max_iterations = std::max(1, std::stoi(value));
+            } else if (body == "TEMP") {
+                // SPICE3 spelling of `.TEMP <t>`.
+                double t = 0.0;
+                if (value.empty() || !parseTemperature(value, t) || t < -273.15) {
+                    setError(".OPTIONS TEMP=<celsius> has a bad value");
+                    return false;
+                }
+                analysis_params_.temp_given = true;
+                analysis_params_.temp_value = t;
+            } else if (body == "SWEEPPAR") {
+                // Distribute independent sweep points across MPI ranks
+                // (each rank keeps its own continuation chain).
+                analysis_params_.opt_sweep_parallel = true;
+            } else if (body == "ACFREQPAR") {
+                // Distribute the AC FREQUENCY sweep across ranks. Unlike the
+                // DC sweep, frequencies are independent and each rank
+                // factorizes the same replicated linearization, so the answer
+                // is bit-identical to a serial run.
+                analysis_params_.opt_ac_freq_parallel = true;
+            } else {
+                analysis_params_.option_warnings.push_back(tokens[k]);
+            }
+        }
+        if (verbose_ && !analysis_params_.option_warnings.empty()) {
+            std::cout << "  .OPTIONS: ignoring unsupported option(s):";
+            for (const auto& w : analysis_params_.option_warnings) {
+                std::cout << " " << w;
+            }
+            std::cout << std::endl;
+        }
     } else if (cmd == ".AC") {
         if (tokens.size() < 5) {
             setError(".AC requires: .AC <DEC|OCT|LIN> <points> <fstart> <fstop>");
             return false;
         }
         analysis_params_.type = AnalysisType::AC;
+        analysis_params_.want_ac = true;
         analysis_params_.ac_variation = toUpper(tokens[1]);
+        if (analysis_params_.ac_variation != "DEC" &&
+            analysis_params_.ac_variation != "OCT" &&
+            analysis_params_.ac_variation != "LIN") {
+            setError(".AC variation must be LIN, DEC or OCT (got '" +
+                     tokens[1] + "')");
+            return false;
+        }
         analysis_params_.ac_points = std::stoi(tokens[2]);
         analysis_params_.ac_fstart = parseValue(tokens[3]);
         analysis_params_.ac_fstop = parseValue(tokens[4]);
+        if (analysis_params_.ac_points < 1) {
+            setError(".AC needs at least one point per decade/octave");
+            return false;
+        }
+        if (!(analysis_params_.ac_fstart > 0.0) ||
+            !(analysis_params_.ac_fstop > 0.0)) {
+            setError(".AC frequencies must be positive");
+            return false;
+        }
         if (verbose_) {
             std::cout << "  Analysis: AC " << analysis_params_.ac_variation 
                       << " sweep" << std::endl;
@@ -832,6 +1033,34 @@ std::vector<std::string> NetlistParser::tokenize(const std::string& line) {
         tokens.push_back(token);
     }
     return tokens;
+}
+
+bool NetlistParser::parseTemperature(const std::string& token, double& celsius) {
+    // SPICE convention: `.TEMP 27` and `.TEMP 27C` are the same; a trailing
+    // `K` marks an explicit Kelvin value (no offset applied). parseValue()
+    // is NOT used here: its `K` suffix means kilo (1e3).
+    std::string s = token;
+    bool kelvin = false;
+    if (!s.empty()) {
+        const char last = static_cast<char>(std::toupper(
+            static_cast<unsigned char>(s.back())));
+        if (last == 'C') {
+            s.pop_back();
+        } else if (last == 'K') {
+            s.pop_back();
+            kelvin = true;
+        }
+    }
+    if (s.empty()) return false;
+    try {
+        size_t idx = 0;
+        const double v = std::stod(s, &idx);
+        if (idx != s.size()) return false;
+        celsius = kelvin ? (v - Const::CtoK) : v;
+    } catch (const std::exception&) {
+        return false;
+    }
+    return true;
 }
 
 double NetlistParser::parseValue(const std::string& str) {

@@ -70,6 +70,8 @@ struct AnalysisParameters {
     // one for backward compatibility).
     bool want_op = false;     // .OP seen
     bool want_tran = false;   // .TRAN seen
+    bool want_dc_sweep = false;  // .DC sweep seen
+    bool want_ac = false;       // .AC seen
     
     // Transient analysis
     double tran_tstep = 0.0;    // Time step
@@ -82,11 +84,47 @@ struct AnalysisParameters {
     double ac_fstart = 1.0;
     double ac_fstop = 1e6;
     
-    // DC sweep
+    // DC sweep (.DC [LIN|DEC|OCT] <source> <start> <stop> <step|points>)
+    // LIN is the default when the keyword is omitted (.DC VIN -10 15 1).
+    // For DEC/OCT, <step> carries the points-per-decade/octave count.
+    std::string dc_variation = "LIN";
     std::string dc_source;
     double dc_start = 0.0;
     double dc_stop = 0.0;
     double dc_step = 0.0;
+
+    // Optional SECOND (inner) sweep: `.DC <spec1> [<spec2>]`. Xyce runs
+    // spec2 as the inner loop and restarts it from its start value at every
+    // point of spec1 (the outer loop).
+    bool dc_nested = false;
+    std::string dc_variation2 = "LIN";
+    std::string dc_source2;
+    double dc_start2 = 0.0;
+    double dc_stop2 = 0.0;
+    double dc_step2 = 0.0;
+
+    // ---- .TEMP ----
+    // Circuit temperature, SPICE convention: degrees Celsius (a trailing
+    // `C` is accepted and stripped; a trailing `K` marks Kelvin). Cards
+    // that pin their own TEMP= keep it (instance > card > circuit).
+    bool temp_given = false;
+    double temp_value = 27.0;        // Celsius
+
+    // ---- .OPTIONS ----
+    // Recognized: NOFAIL (keep sweeping past a non-converged point),
+    // RETRY=<n> (source-step refinement depth per failed point),
+    // MAXITERS=<n> (Newton iteration cap), TEMP=<t> (same as `.TEMP`),
+    // SWEEPPAR (distribute independent sweep points across ranks),
+    // ACFREQPAR (distribute the AC frequency sweep across ranks — results
+    // stay bit-identical, frequencies are independent).
+    // Unknown tokens are collected in `option_warnings` instead of aborting
+    // the netlist (forward compatible).
+    bool opt_nofail = false;
+    int  opt_max_retries = 3;
+    int  opt_max_iterations = 0;     // 0 = engine default
+    bool opt_sweep_parallel = false;
+    bool opt_ac_freq_parallel = false;
+    std::vector<std::string> option_warnings;
 };
 
 /**
@@ -231,12 +269,23 @@ private:
     bool parseModel(const std::vector<std::string>& tokens);
     
     /**
-     * @brief Parses a source waveform: DC/AC <v> | PULSE(...) | SIN(...) | PWL(...)
+     * @brief Parses a source line's specifications (SPICE dual spec):
+     *        `<time-spec> [AC <mag> [phase]]` where time-spec is
+     *        DC <v> | PULSE(...) | SIN(...) | PWL(...) | omitted when only
+     *        `AC` is given (which implies a DC value of 0).
      */
     bool parseSourceSpec(const std::vector<std::string>& tokens,
                          size_t first_param,
                          SourceWaveform& waveform,
                          Circuit& circuit);
+
+    /**
+     * @brief Parses the `AC <mag> [phase]` small-signal part (phase in
+     *        degrees) and stores it on the waveform.
+     */
+    bool parseACSpec(const std::vector<std::string>& tokens,
+                     size_t from,
+                     SourceWaveform& waveform);
     
     /**
      * @brief Collects the numeric tokens of a waveform spec.
@@ -309,6 +358,19 @@ private:
      * @brief Converts string to double with multipliers (k, m, u, n, p, f, meg)
      */
     double parseValue(const std::string& str);
+
+    /**
+     * @brief Parses a `.TEMP`/`.OPTIONS TEMP=` temperature.
+     *
+     * SPICE convention: degrees Celsius, with an optional trailing `C`;
+     * a trailing `K` marks an explicit Kelvin value. Deliberately does NOT
+     * go through parseValue(), whose `K` suffix means kilo.
+     *
+     * @param token   netlist token ("27", "27C", "300.15K", "-40")
+     * @param celsius output, degrees Celsius
+     * @return false when the token is not a temperature
+     */
+    static bool parseTemperature(const std::string& token, double& celsius);
     
     /**
      * @brief Removes comments and extra spaces from a line

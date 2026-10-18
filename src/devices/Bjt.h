@@ -210,6 +210,13 @@ public:
      */
     RCP<const BjtModel> model() const { return model_; }
 
+    // ---- circuit temperature (`.TEMP`) ----
+    // Thermal snapshot is read through a pointer into the card (like the
+    // diode), so re-scaling the card is enough.
+    RCP<const DeviceModel> temperatureCard() const override {
+        return RCP<const DeviceModel>(model_);
+    }
+
     /**
      * @brief Per-instance parameters.
      */
