@@ -17,10 +17,14 @@
 #include "analysis/ACAnalysis.h"
 #include "analysis/DCAnalysis.h"
 #include "analysis/DCSweep.h"
+#include "analysis/NoiseAnalysis.h"
+#include "analysis/TFAnalysis.h"
 #include "analysis/TransientAnalysis.h"
 #include "parallel/MPIManager.h"
 
 #include <stdio.h>
+#include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -57,6 +61,32 @@ static std::vector<std::string> nodeLabels(const Circuit& circuit) {
                                 : name));
     }
     return labels;
+}
+
+/**
+ * @brief Prints one AC log line, magnitude AND decibels.
+ *
+ * Both are printed on purpose: a frequency response is read in dB (0 dB is
+ * the input level, so a roll-off shows up as negative dB and a resonance as a
+ * positive bump), while the linear magnitude alone decays "towards zero" and
+ * leaves it unclear whether the response ever crossed unity. Phases are in
+ * degrees, matching the CSV.
+ */
+static void printACPoint(const ACDataPoint& p,
+                         const std::vector<std::string>& labels,
+                         const std::string& prefix = "  ") {
+    std::cout << prefix << "f=" << p.frequency << " Hz: ";
+    for (size_t j = 0; j < p.mag.size() && j < labels.size(); ++j) {
+        std::cout << "|" << labels[j] << "|=" << p.mag[j]
+                  << " (" << p.db[j] << " dB) @" << p.phase_deg[j] << "deg ";
+    }
+    for (size_t k = 0; k < p.branch_mag.size(); ++k) {
+        const double db = 20.0 * std::log10(std::max(p.branch_mag[k], 1e-300));
+        std::cout << "|I|=" << p.branch_mag[k] << " (" << db << " dB) @"
+                  << p.branch_phase_deg[k] << "deg ";
+    }
+    if (!p.valid) std::cout << "(no solution) ";
+    std::cout << std::endl;
 }
 
 /**
@@ -122,6 +152,8 @@ bool simulateNetlist(const std::string& filename, bool use_mpi,
     const bool do_tran = params.want_tran || params.type == AnalysisType::TRANSIENT;
     const bool do_dc = params.want_dc_sweep || params.type == AnalysisType::DC_SWEEP;
     const bool do_ac = params.want_ac || params.type == AnalysisType::AC;
+    const bool do_noise = params.want_noise || params.type == AnalysisType::NOISE;
+    const bool do_tf = params.want_tf || params.type == AnalysisType::TF;
 
     if (do_op) {
         DCAnalysis dc(circuit);
@@ -205,8 +237,8 @@ bool simulateNetlist(const std::string& filename, bool use_mpi,
                 }
             }
         }
-    } else if (!do_op && !do_dc && !do_ac) {
-        if (mpi.isMaster()) std::cerr << "No analysis specified in netlist (use .OP, .TRAN, .DC or .AC)" << std::endl;
+    } else if (!do_op && !do_dc && !do_ac && !do_noise && !do_tf) {
+        if (mpi.isMaster()) std::cerr << "No analysis specified in netlist (use .OP, .TRAN, .DC, .AC or .NOISE)" << std::endl;
         return false;
     }
 
@@ -373,20 +405,217 @@ bool simulateNetlist(const std::string& filename, bool use_mpi,
                       << " | time: " << result.stats.elapsed_seconds << " s"
                       << std::endl;
 
-            const int stride = std::max<int>(1, (int)result.points.size() / 10);
-            std::cout << "\nMagnitude / phase:" << std::endl;
+            // A frequency response is read in dB (0 dB = the input level, and
+            // a roll-off shows as negative dB); the linear magnitude alone
+            // decays "towards zero" and hides whether the circuit ever
+            // crossed unity. Both are printed, plus the peak of every node so
+            // a narrow resonance cannot be missed by the sampling below.
+            if (!result.stats.node_peak_mag.empty()) {
+                std::cout << "  Peaks (of the sampled grid — a very high-Q "
+                             "resonance can be narrower than the frequency step):"
+                          << std::endl;
+                const size_t shown = std::min<size_t>(4, result.stats.node_peak_mag.size());
+                for (size_t i = 0; i < shown; ++i) {
+                    const std::string& nm = i < labels.size() ? labels[i] : std::string("?");
+                    std::cout << "    |" << nm << "|_max = "
+                              << result.stats.node_peak_mag[i] << " ("
+                              << result.stats.node_peak_db[i] << " dB) at "
+                              << result.stats.node_peak_freq[i] << " Hz" << std::endl;
+                }
+                if (result.stats.node_peak_mag.size() > shown) {
+                    std::cout << "    (" << result.stats.node_peak_mag.size() - shown
+                              << " more node(s) in the CSV)" << std::endl;
+                }
+            }
+
+            // Sample: the retained points, uniformly, PLUS the peak row so a
+            // sharp resonance is always visible in the log.
+            const size_t stride = std::max<size_t>(
+                1, (result.points.size() + 9) / 10);
+            std::cout << "\nMagnitude / phase (linear and dB):" << std::endl;
             for (size_t i = 0; i < result.points.size(); i += stride) {
+                printACPoint(result.points[i], labels);
+            }
+            if (result.stats.peak_node >= 0 && !result.points.empty()) {
+                // Print the row at the peak frequency reported above. The
+                // search is by FREQUENCY, not by magnitude: stats already holds
+                // the exact peak over the whole sweep, and the retained sample
+                // may be decimated (then this is the nearest row to it).
+                const size_t pn = static_cast<size_t>(result.stats.peak_node);
+                const double f_peak =
+                    pn < result.stats.node_peak_freq.size()
+                        ? result.stats.node_peak_freq[pn]
+                        : 0.0;
+                size_t best = 0;
+                for (size_t k = 1; k < result.points.size(); ++k) {
+                    if (std::fabs(result.points[k].frequency - f_peak) <
+                        std::fabs(result.points[best].frequency - f_peak)) {
+                        best = k;
+                    }
+                }
+                if (best % stride != 0) {
+                    printACPoint(result.points[best], labels, "  (peak) ");
+                }
+            }
+        }
+    }
+
+    if (do_noise) {
+        auto variationOf = [](const std::string& v) {
+            return (v == "DEC") ? ACVariation::DEC
+                 : (v == "OCT") ? ACVariation::OCT
+                                : ACVariation::LIN;
+        };
+
+        NoiseAnalysis noise(circuit);
+        noise.setVariation(variationOf(params.ac_variation));
+        noise.setPoints(params.ac_points);
+        noise.setFrequencyRange(params.ac_fstart, params.ac_fstop);
+        if (params.noise_ref_node == "0" || params.noise_ref_node.empty()) {
+            noise.setOutputNode(params.noise_out_node);
+        } else {
+            noise.setOutputNode(params.noise_out_node, params.noise_ref_node);
+        }
+        if (params.noise_source_given) noise.setInputSource(params.noise_source);
+        // SPICE's pts_per_summary: per-generator contribution breakdown.
+        noise.setSourceDetail(params.noise_detail);
+        noise.setTolerance(1e-10);
+        noise.setVerbose(mpi.isMaster());
+        if (params.opt_max_iterations > 0) {
+            noise.setMaxIterations(params.opt_max_iterations);
+        }
+        // `.OPTIONS ACFREQPAR` splits the frequencies across ranks: each rank
+        // runs the SAME adjoint solve on its own frequencies, so the answer is
+        // bit-identical to a serial run.
+        noise.setPointDistribution(params.opt_ac_freq_parallel);
+
+        std::ofstream csv;
+        if (mpi.isMaster() && !csv_path.empty()) {
+            csv.open(csv_path);
+            if (csv.is_open()) {
+                csv.precision(17);
+                noise.setCsvStream(&csv);
+            } else {
+                std::cerr << "Erro ao criar o arquivo " << csv_path << "\n";
+            }
+        }
+        noise.setMaxRetainedPoints(kACMaxRetainedPoints);
+        if (mpi.isMaster()) {
+            noise.setProgressCallback([](size_t done, size_t total, double f) {
+                std::cout << "  Noise sweep: " << done << "/" << total
+                          << " frequencies (last " << f << " Hz)" << std::endl;
+            });
+        }
+
+        NoiseResult result = noise.run(use_mpi);
+
+        if (mpi.isMaster() && csv.is_open()) {
+            csv.close();
+            std::cout << "\n[e-XSpice] Dados salvos em: " << csv_path << "\n";
+        }
+
+        if (!result.success) {
+            if (mpi.isMaster()) {
+                std::cerr << "Noise analysis failed: " << result.message
+                          << std::endl;
+            }
+            mpi.barrier();
+            return false;
+        }
+
+        if (mpi.isMaster()) {
+            std::cout << "\nNoise analysis completed: " << result.message
+                      << std::endl;
+            std::cout << "  OP iterations: " << result.stats.newton_iterations
+                      << " | factorizations: " << result.stats.factorizations
+                      << " | LU flops: " << result.stats.factor_flops
+                      << " | ranks: " << result.stats.ranks_used
+                      << " | time: " << result.stats.elapsed_seconds << " s"
+                      << std::endl;
+
+            // The integrated numbers are what a noise budget is quoted in
+            // (rms over the analysed band), so they lead.
+            std::cout << "\nIntegrated noise over the swept band:" << std::endl;
+            std::cout << "  Output  V(" << result.output_node
+                      << (result.reference_node == "0" ? ""
+                                                     : "," + result.reference_node)
+                      << ") = " << result.stats.output_noise_rms << " V rms  ("
+                      << result.stats.output_noise_v2 << " V^2)" << std::endl;
+            if (!result.input_source.empty()) {
+                std::cout << "  Input   referred to " << result.input_source
+                          << "   = " << result.stats.input_noise_rms
+                          << " V rms  (" << result.stats.input_noise_v2
+                          << " V^2)" << std::endl;
+            }
+            std::cout << "  Peak of the output PSD = "
+                      << std::sqrt(std::max(result.stats.peak_output_psd, 0.0))
+                      << " V/sqrt(Hz) at " << result.stats.peak_output_freq
+                      << " Hz" << std::endl;
+
+            // Noise budget: the generators that actually move the number.
+            if (!result.sources.empty() &&
+                !result.stats.source_noise_v2.empty()) {
+                std::vector<size_t> order(result.sources.size());
+                for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+                std::sort(order.begin(), order.end(),
+                          [&](size_t a, size_t b) {
+                              return result.stats.source_noise_v2[a] >
+                                     result.stats.source_noise_v2[b];
+                          });
+                const double total = std::max(result.stats.output_noise_v2, 0.0);
+                std::cout << "\nNoise sources (integrated output contribution):"
+                          << std::endl;
+                const size_t shown = std::min<size_t>(10, order.size());
+                for (size_t i = 0; i < shown; ++i) {
+                    const size_t k = order[i];
+                    const double v2 = result.stats.source_noise_v2[k];
+                    const double pct = (total > 0.0) ? 100.0 * v2 / total : 0.0;
+                    std::cout << "  " << result.sources[k].device << " ("
+                              << result.sources[k].label << "): "
+                              << std::sqrt(std::max(v2, 0.0)) << " V rms, "
+                              << pct << "%" << std::endl;
+                }
+                if (order.size() > shown) {
+                    std::cout << "  (" << order.size() - shown
+                              << " more source(s) in the CSV)" << std::endl;
+                }
+            }
+
+            const size_t nstride = std::max<size_t>(
+                1, (result.points.size() + 9) / 10);
+            std::cout << "\nNoise spectral density (V/sqrt(Hz)):" << std::endl;
+            for (size_t i = 0; i < result.points.size(); i += nstride) {
                 const auto& p = result.points[i];
-                std::cout << "  f=" << p.frequency << " Hz: ";
-                for (size_t j = 0; j < std::min<size_t>(3, p.mag.size()); ++j) {
-                    std::cout << "|" << labels[j] << "|=" << p.mag[j] << "V";
-                    std::cout << "@" << p.phase_deg[j] << "deg ";
-                }
-                if (!p.branch_mag.empty()) {
-                    std::cout << "|I|=" << p.branch_mag[0]
-                              << "A@" << p.branch_phase_deg[0] << "deg ";
-                }
-                std::cout << std::endl;
+                std::cout << "  f=" << p.frequency
+                          << " Hz: onoise=" << p.onoise_amp
+                          << " inoise=" << p.inoise_amp
+                          << " |gain|=" << p.gain_mag << std::endl;
+            }
+            std::cout << "\nThe CSV carries the power spectral densities in "
+                         "V^2/Hz (plus per-source columns when the .NOISE "
+                         "line has pts_per_summary)." << std::endl;
+        }
+    }
+
+    if (do_tf) {
+        TFAnalysis tf(circuit);
+        tf.setOutputVar(params.tf_out_var);
+        tf.setInputSource(params.tf_input_source);
+        tf.setVerbose(mpi.isMaster());
+        if (params.opt_max_iterations > 0) tf.setMaxIterations(params.opt_max_iterations);
+        TFResult result = tf.run();
+        if (mpi.isMaster()) {
+            if (!result.success) {
+                std::cerr << "TF analysis failed: " << result.message << std::endl;
+            } else {
+                std::cout << "\nTransfer function analysis completed: "
+                          << result.message << std::endl;
+                std::cout << "  transfer function = " << result.transfer_function
+                          << std::endl;
+                std::cout << "  input  resistance = " << result.input_resistance
+                          << " ohm" << std::endl;
+                std::cout << "  output resistance = " << result.output_resistance
+                          << " ohm" << std::endl;
             }
         }
     }

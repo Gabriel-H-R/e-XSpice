@@ -431,6 +431,46 @@ double Diode::getCurrent() const {
     return currentForVoltage(junctionVoltageFromNodes());
 }
 
+// ===============================================================
+// Noise (`.NOISE`)
+// ===============================================================
+// Topology with RS (see loadF): the anode row `ip` feeds the internal node
+// `ir = priRow()` through RS, and the junction drives Id from `ir` into the
+// cathode row `in`. So:
+//   - the series resistance is a resistor between ip and ir,
+//   - the shot-noise current source is between ir and in.
+
+// A reverse-biased junction carries no carriers: SPICE's 2qI would produce a
+// positive density from a negative current, which is unphysical noise. Only
+// the forward current is used.
+
+void Diode::loadNoiseSources(const NoiseContext& ctx,
+                             std::vector<NoiseSource>& out) const {
+    const int ip = rowOf(nodes_[0]);
+    const int in = rowOf(nodes_[1]);
+    const int ir = priRow();
+
+    const double id = junctionCurrent();
+    if (id > 0.0) {
+        NoiseSource s;
+        s.label = "shot";
+        s.pos = ir;
+        s.neg = in;
+        s.psd_a2 = 2.0 * ctx.charge * id;
+        s.f_exponent = 0.0;
+        out.push_back(s);
+    }
+    if (thermal_ && thermal_->gspr > 0.0 && ir >= 0 && ir != ip) {
+        NoiseSource s;
+        s.label = "rs";
+        s.pos = ip;
+        s.neg = ir;
+        s.psd_a2 = 4.0 * ctx.boltzmann * ctx.temperature * thermal_->gspr;
+        s.f_exponent = 0.0;
+        out.push_back(s);
+    }
+}
+
 double Diode::getPower() const {
     return getVoltage() * getCurrent();
 }

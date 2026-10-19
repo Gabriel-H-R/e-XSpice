@@ -1,0 +1,28 @@
+* .NOISE smoke test: resistive divider, the case with an exact closed form.
+*
+*   V1 in 0 DC 1        (ideal source: in noise analysis it is a SHORT)
+*   R1 in out 10k
+*   R2 out 0 10k
+*
+* Noise sources: both resistors, 4kT/R (white).
+* An ideal voltage source is a short for noise, so node `in` sits at 0 V and
+* every generator sees the PARALLEL pair R1||R2 = 5k as its transfer
+* resistance (R1's noise current returns through R1 or through the shorted
+* source; a current injected at `out` returns through R1 or R2).
+*
+*   S_out(f) = (R1||R2)^2 * 4kT * (1/R1 + 1/R2) = 8.2875e-17 V^2/Hz
+*   gain     = V(out)/V(in) = R2/(R1+R2) = 1/2
+*   S_in     = S_out/gain^2 = 4kT(R1+R2) = 3.3151e-16 V^2/Hz
+*              (the textbook equivalent input noise of a resistive divider)
+*
+* At 300.15 K and R = 10k: 4kT/R = 1.65755e-24 A^2/Hz
+*   S_out = 8.2875e-17 V^2/Hz  ( 9.1039 nV/sqrt(Hz))
+*   S_in  = 3.3151e-16 V^2/Hz  (18.2077 nV/sqrt(Hz))
+*
+* The .NOISE line carries pts_per_summary=1, so the CSV also has one column
+* per noise generator.
+V1 in 0 DC 1
+R1 in out 10k
+R2 out 0 10k
+.NOISE V(out) V1 DEC 10 1 1e6 1
+.END

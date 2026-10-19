@@ -146,6 +146,18 @@ public:
     double getSourceCurrent() const { return p_ * is_; }
     double getBulkCurrent()  const { return p_ * ib_; }
     double getTransconductance() const { return gm_; }
+
+    /**
+     * @brief Channel thermal noise of the level-1 model, (8/3)·k·T·gm as a
+     *        drain-to-source current-noise pair.
+     *
+     *        This is the classic SPICE3 MOS1 generator (Van der Ziel): a short
+     *        channel at the drain end is pinched to a few carriers, so the
+     *        channel noise is (8/3)kT·gm rather than the naive 4kT·gds. Flicker
+     *        noise (KF/AF) is NOT part of the level-1 card yet.
+     */
+    void loadNoiseSources(const NoiseContext& ctx,
+                          std::vector<NoiseSource>& out) const override;
     bool   inSaturation() const { return saturated_; }
 
     RCP<const DeviceModel> model() const { return model_; }

@@ -739,4 +739,66 @@ double Bjt::getPower() const {
     return pwr;
 }
 
+// ===============================================================
+// Noise (`.NOISE`)
+// ===============================================================
+// Topology (see loadF): the netlist nodes collector/base/emitter feed the
+// INTRINSIC nodes bi/ci/ei through RB/RC/RE when those are non-zero, and the
+// transistor itself acts on the intrinsic rows. So the ohmic resistances are
+// noise sources only when the internal node exists, and the shot noise of each
+// junction sits between the intrinsic terminals it actually drives.
+//
+// Currents are physical (getCollectorCurrent/getEmitterCurrent apply the PNP
+// polarity), but noise is symmetric: only the magnitude matters.
+
+void Bjt::loadNoiseSources(const NoiseContext& ctx,
+                           std::vector<NoiseSource>& out) const {
+    const double kT4 = 4.0 * ctx.boltzmann * ctx.temperature;
+
+    const int rb = rowOf(nodes_[1]);
+    const int rc = rowOf(nodes_[0]);
+    const int re = rowOf(nodes_[2]);
+    const int bi = rowBi();
+    const int ci = rowCi();
+    const int ei = rowEi();
+
+    auto thermal = [&](const char* label, int a, int b, double g) {
+        if (!(g > 0.0) || a < 0 || b < 0 || a == b) return;
+        NoiseSource s;
+        s.label = label;
+        s.pos = a;
+        s.neg = b;
+        s.psd_a2 = kT4 * g;
+        s.f_exponent = 0.0;
+        out.push_back(s);
+    };
+
+    // Ohmic resistances (only when the internal node exists).
+    if (offB_ >= 0) thermal("rb", rb, bi, gb_);
+    if (offC_ >= 0) thermal("rc", rc, ci, gc_);
+    if (offE_ >= 0) thermal("re", re, ei, ge_);
+
+    // Shot noise: 2q·I at the collector junction and at the emitter junction.
+    const double ic = std::fabs(getCollectorCurrent());
+    const double ie = std::fabs(getEmitterCurrent());
+    if (ic > 0.0 && bi >= 0 && ci >= 0) {
+        NoiseSource s;
+        s.label = "ic";
+        s.pos = bi;
+        s.neg = ci;
+        s.psd_a2 = 2.0 * ctx.charge * ic;
+        s.f_exponent = 0.0;
+        out.push_back(s);
+    }
+    if (ie > 0.0 && bi >= 0 && ei >= 0) {
+        NoiseSource s;
+        s.label = "ie";
+        s.pos = bi;
+        s.neg = ei;
+        s.psd_a2 = 2.0 * ctx.charge * ie;
+        s.f_exponent = 0.0;
+        out.push_back(s);
+    }
+}
+
 } // namespace e_XSpice

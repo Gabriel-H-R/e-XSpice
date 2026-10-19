@@ -108,6 +108,28 @@ struct ACStats {
     bool pivot_perturbed = false;     // safeguard triggered (should be rare)
     int  ranks_used = 1;              // 1 = local parallel, >1 = split
     double elapsed_seconds = 0.0;
+
+    // ---- resonance summary ------------------------------------------
+    // Largest magnitude found in the WHOLE sweep (not in the decimated
+    // sample), which is the one number a frequency response is usually read
+    // for: where the circuit peaks and how high it goes.
+    //
+    // NOTE: this is the peak OF THE SAMPLED GRID. A very high-Q resonance is
+    // narrower than the frequency step (Q = 1e6 gives a 0.16 Hz bandwidth at
+    // 159 kHz, against 3.7 kHz between DEC-100/decade points), so the sampled
+    // peak is the grid point closest to f0, not the true peak Q. That is a
+    // property of the sweep, identical in every simulator — reported here so
+    // nobody reads the sampled number as the circuit's Q.
+    //
+    // Per node, because "which node peaks" has no single answer when two
+    // nodes are nearly equal (a series resistance, for instance).
+    std::vector<double> node_peak_mag;    // per reported node
+    std::vector<double> node_peak_db;
+    std::vector<double> node_peak_freq;
+    int    peak_node = -1;                // node with the largest peak overall
+    double peak_frequency = 0.0;
+    double peak_mag = 0.0;
+    double peak_db = 0.0;
 };
 
 /**

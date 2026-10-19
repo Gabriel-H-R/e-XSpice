@@ -969,6 +969,131 @@ bool NetlistParser::parseCommand(const std::vector<std::string>& tokens) {
             std::cout << "  Analysis: AC " << analysis_params_.ac_variation 
                       << " sweep" << std::endl;
         }
+    } else if (cmd == ".NOISE") {
+        //   .NOISE V(out[,ref]) <src> (DEC|OCT|LIN) <pts> <fstart> <fstop>
+        //         [pts_per_summary]
+        // ngspice/Xyce/SPICE3 order. `src` may also be written SRC=V1.
+        if (tokens.size() < 6) {
+            setError(".NOISE requires: .NOISE V(out[,ref]) <src> "
+                     "<DEC|OCT|LIN> <points> <fstart> <fstop> [pts_per_summary]");
+            return false;
+        }
+        // ---- V(out[,ref]) ----
+        // The tokenizer emits parentheses as separate tokens, so V(out,ref)
+        // arrives as V ( out,ref ) and the name is rebuilt from the tokens in
+        // between (a space after the comma is tolerated).
+        if (tokens.size() < 3 || toUpper(tokens[1]) != "V" || tokens[2] != "(") {
+            setError(".NOISE first argument must be V(node) or V(node,ref)");
+            return false;
+        }
+        size_t close = 3;
+        while (close < tokens.size() && tokens[close] != ")") ++close;
+        if (close >= tokens.size() || close == 3) {
+            setError(".NOISE: malformed V(...) argument");
+            return false;
+        }
+        std::string spec;
+        for (size_t k = 3; k < close; ++k) spec += tokens[k];
+        const size_t comma = spec.find(',');
+        if (comma == std::string::npos) {
+            analysis_params_.noise_out_node = spec;
+            analysis_params_.noise_ref_node = "0";
+        } else {
+            analysis_params_.noise_out_node = spec.substr(0, comma);
+            analysis_params_.noise_ref_node = spec.substr(comma + 1);
+        }
+        if (analysis_params_.noise_out_node.empty()) {
+            setError(".NOISE: empty output node in V(...)");
+            return false;
+        }
+
+        // ---- input source (optional, ngspice style) / SRC= (Xyce style) ----
+        size_t idx = close + 1;
+        std::string src_token = toUpper(tokens[idx]);
+        if (src_token.rfind("SRC=", 0) == 0) {
+            analysis_params_.noise_source = tokens[idx].substr(4);
+            analysis_params_.noise_source_given = true;
+            ++idx;
+        } else if (src_token != "DEC" && src_token != "OCT" &&
+                   src_token != "LIN") {
+            analysis_params_.noise_source = tokens[idx];
+            analysis_params_.noise_source_given = true;
+            ++idx;
+        }
+
+        // ---- sweep ----
+        if (tokens.size() < idx + 4) {
+            setError(".NOISE requires <DEC|OCT|LIN> <points> <fstart> <fstop>");
+            return false;
+        }
+        const std::string variation = toUpper(tokens[idx]);
+        if (variation != "DEC" && variation != "OCT" && variation != "LIN") {
+            setError(".NOISE variation must be LIN, DEC or OCT (got '" +
+                     tokens[idx] + "')");
+            return false;
+        }
+        analysis_params_.type = AnalysisType::NOISE;
+        analysis_params_.want_noise = true;
+        analysis_params_.ac_variation = variation;
+        analysis_params_.ac_points = std::stoi(tokens[idx + 1]);
+        analysis_params_.ac_fstart = parseValue(tokens[idx + 2]);
+        analysis_params_.ac_fstop = parseValue(tokens[idx + 3]);
+        if (analysis_params_.ac_points < 1) {
+            setError(".NOISE needs at least one point per decade/octave");
+            return false;
+        }
+        if (!(analysis_params_.ac_fstart > 0.0) ||
+            !(analysis_params_.ac_fstop > 0.0)) {
+            setError(".NOISE frequencies must be positive");
+            return false;
+        }
+        if (analysis_params_.ac_fstop < analysis_params_.ac_fstart) {
+            setError(".NOISE: stop frequency is below the start frequency");
+            return false;
+        }
+        // ---- pts_per_summary: per-generator contribution breakdown ----
+        if (tokens.size() > idx + 4) {
+            const int summary = std::stoi(tokens[idx + 4]);
+            analysis_params_.noise_detail = (summary > 0);
+        }
+        if (verbose_) {
+            std::cout << "  Analysis: NOISE V("
+                      << analysis_params_.noise_out_node;
+            if (analysis_params_.noise_ref_node != "0") {
+                std::cout << "," << analysis_params_.noise_ref_node;
+            }
+            std::cout << ") " << variation << " sweep, input source "
+                      << (analysis_params_.noise_source.empty()
+                              ? "(first V source)" : analysis_params_.noise_source)
+                      << std::endl;
+        }
+    } else if (cmd == ".TF") {
+        if (tokens.size() < 3) {
+            setError(".TF requires: .TF <outvar> <insrc>");
+            return false;
+        }
+        // tokens[1] = V ( ( ... )  or  I ( ( ... )  — reassemble the
+        // parenthesized argument from the tokenized form.
+        if (tokens.size() < 4 || tokens[2] != "(") {
+            setError(".TF first argument must be V(...) or I(...)");
+            return false;
+        }
+        size_t close = 3;
+        while (close < tokens.size() && tokens[close] != ")") ++close;
+        if (close >= tokens.size() || close == 3) {
+            setError(".TF: malformed output variable");
+            return false;
+        }
+        std::string spec;
+        for (size_t k = 1; k <= close; ++k) spec += tokens[k];
+        analysis_params_.tf_out_var = spec;
+        analysis_params_.tf_input_source = tokens[close + 1];
+        analysis_params_.type = AnalysisType::TF;
+        analysis_params_.want_tf = true;
+        if (verbose_) {
+            std::cout << "  Analysis: TF " << analysis_params_.tf_out_var
+                      << " / " << analysis_params_.tf_input_source << std::endl;
+        }
     } else if (cmd == ".MODEL") {
         return parseModel(tokens);
     } else if (cmd == ".END") {

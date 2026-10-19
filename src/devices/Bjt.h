@@ -190,6 +190,14 @@ public:
     double getVbc() const { return vbc_cached_; }
     double getBaseCurrent()      const { return p_ * ib_; }
     double getCollectorCurrent() const { return p_ * ic_; }
+
+    /**
+     * @brief Noise generators at the operating point: thermal noise of the
+     *        three ohmic resistances (RB/RC/RE, only when the card creates the
+     *        internal node) plus shot noise 2q·I at both junctions.
+     */
+    void loadNoiseSources(const NoiseContext& ctx,
+                          std::vector<NoiseSource>& out) const override;
     double getEmitterCurrent()   const { return p_ * ie_; }
     /** Stored base-emitter charge of the last evaluation. */
     double getBaseCharge()       const { return p_ * qbe_; }

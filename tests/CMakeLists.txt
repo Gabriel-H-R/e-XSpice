@@ -56,6 +56,10 @@ target_link_libraries(test_complex_lu e-XSpice_lib)
 add_executable(test_ac test_ac.cpp)
 target_link_libraries(test_ac e-XSpice_lib)
 
+# 8h. Noise analysis (.NOISE)
+add_executable(test_noise test_noise.cpp)
+target_link_libraries(test_noise e-XSpice_lib)
+
 # DC convergence diagnostics: current-source biased BJT (limiting walk)
 add_executable(debug_bjt_dc debug_bjt_dc.cpp)
 target_link_libraries(debug_bjt_dc e-XSpice_lib)
@@ -75,6 +79,7 @@ add_test(NAME BSIM4_MOSFET COMMAND test_bsim4)
 add_test(NAME DC_Sweep COMMAND test_dc_sweep)
 add_test(NAME Complex_LU COMMAND test_complex_lu)
 add_test(NAME AC_Analysis COMMAND test_ac)
+add_test(NAME Noise_Analysis COMMAND test_noise)
 
 # RL step debug
 add_executable(debug_rl debug_rl.cpp)
@@ -203,22 +208,22 @@ endif()
 # ================================================================
 # AC small-signal analysis (.AC) — end to end through the CLI
 # ================================================================
-# RC low-pass, DEC 2 points/decade from 10 Hz to 1 MHz = 11 frequencies.
+# RC low-pass, DEC 100 points/decade from 10 Hz to 1 MHz = 501 frequencies.
 add_test(NAME AC_Netlist
          COMMAND ${CMAKE_COMMAND}
                  -DBINARY=$<TARGET_FILE:e-XSpice>
                  -DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/ac_rc_netlist.cir
-                 -DEXPECT_ROWS=11
+                 -DEXPECT_ROWS=501
                  -DEXPECT_HEADER=frequency,Vin_mag,Vin_phase,Vout_mag,Vout_phase,V1_imag_mag,V1_imag_phase
                  -P ${CMAKE_CURRENT_SOURCE_DIR}/check_csv.cmake)
 
-# MNA circuit (inductor + source): the pivot-safe ordering path through the
-# CLI, and the branch-current columns of the CSV.
+# Series RLC (MNA with an inductor): the pivot-safe ordering path through the
+# CLI, the branch-current columns of the CSV, and a resonant peak in the log.
 add_test(NAME AC_Netlist_MNA
          COMMAND ${CMAKE_COMMAND}
                  -DBINARY=$<TARGET_FILE:e-XSpice>
                  -DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/ac_rlc_netlist.cir
-                 -DEXPECT_ROWS=41
+                 -DEXPECT_ROWS=401
                  -P ${CMAKE_CURRENT_SOURCE_DIR}/check_csv.cmake)
 
 if(MPIEXEC_EXECUTABLE)
@@ -230,7 +235,7 @@ if(MPIEXEC_EXECUTABLE)
              COMMAND ${CMAKE_COMMAND}
                      -DBINARY=$<TARGET_FILE:e-XSpice>
                      -DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/ac_rc_netlist.cir
-                     -DEXPECT_ROWS=11
+                     -DEXPECT_ROWS=501
                      -DEXPECT_HEADER=frequency,Vin_mag,Vin_phase,Vout_mag,Vout_phase,V1_imag_mag,V1_imag_phase
                      -DMPIEXEC=${MPIEXEC_EXECUTABLE}
                      -DMPI_NP_FLAG=${MPIEXEC_NUMPROC_FLAG}
@@ -244,6 +249,36 @@ if(MPIEXEC_EXECUTABLE)
                      -DBINARY=$<TARGET_FILE:e-XSpice>
                      -DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/ac_freqpar_netlist.cir
                      -DEXPECT_ROWS=41
+                     -DMPIEXEC=${MPIEXEC_EXECUTABLE}
+                     -DMPI_NP_FLAG=${MPIEXEC_NUMPROC_FLAG}
+                     -DMPI_NP=2
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/check_csv.cmake)
+endif()
+
+# ================================================================
+# NOISE analysis (.NOISE) — end to end through the CLI
+# ================================================================
+# Resistive divider: the header and the per-generator columns (the .NOISE line
+# carries pts_per_summary=1, which is what turns the breakdown on).
+add_test(NAME Noise_Netlist
+         COMMAND ${CMAKE_COMMAND}
+                 -DBINARY=$<TARGET_FILE:e-XSpice>
+                 -DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/noise_divider_netlist.cir
+                 -DEXPECT_ROWS=61
+                 -DEXPECT_HEADER=frequency,onoise_psd_v2_per_hz,inoise_psd_v2_per_hz,gain_mag,gain_phase_deg,R1_thermal_psd_v2_per_hz,R2_thermal_psd_v2_per_hz
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/check_csv.cmake)
+
+if(MPIEXEC_EXECUTABLE)
+    # The noise sweep splits frequencies, but every rank runs the SAME adjoint
+    # solve on the same replicated matrix and the integral is a sum over the
+    # whole sweep, so the distributed CSV must be byte-identical to the serial
+    # one (same guarantee as the AC sweep).
+    add_test(NAME Noise_Netlist_MPI
+             COMMAND ${CMAKE_COMMAND}
+                     -DBINARY=$<TARGET_FILE:e-XSpice>
+                     -DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/noise_divider_netlist.cir
+                     -DEXPECT_ROWS=61
+                     -DEXPECT_HEADER=frequency,onoise_psd_v2_per_hz,inoise_psd_v2_per_hz,gain_mag,gain_phase_deg,R1_thermal_psd_v2_per_hz,R2_thermal_psd_v2_per_hz
                      -DMPIEXEC=${MPIEXEC_EXECUTABLE}
                      -DMPI_NP_FLAG=${MPIEXEC_NUMPROC_FLAG}
                      -DMPI_NP=2

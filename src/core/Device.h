@@ -58,6 +58,7 @@
 
 #include "e_XSpice_rcp.h"   // RCP<T>: intrusive refcounted ownership
 #include "Node.h"
+#include "NoiseSource.h"
 #include "StateIndex.h"
 // Complete type: temperatureCard() hands RCP<const DeviceModel> handles
 // around, and RCP's release path calls dec_ref() on the pointee.
@@ -236,6 +237,29 @@ public:
                                   std::vector<double>& Breal,
                                   std::vector<double>& Bimag) const {
         (void)omega; (void)Breal; (void)Bimag;
+    }
+
+    /**
+     * @brief Reports the NOISE GENERATORS of this device at the operating
+     *        point (`.NOISE` analysis).
+     *
+     * Called ONCE per analysis, after the DC operating point converged and
+     * the linearization was refreshed — not once per frequency. A device
+     * appends one NoiseSource per physical generator (thermal, shot,
+     * flicker, each ohmic resistance of a BJT, ...); the analysis then
+     * applies the frequency law S(f) = psd_a2·f^(-f_exponent) and the
+     * adjoint transfer, so the whole sweep costs one extra multiply per
+     * generator instead of a solve.
+     *
+     * `pos`/`neg` are DAE row indices obtained from rowOf(); a device whose
+     * terminal is the ground gets -1 and the analysis drops it. The current
+     * flows pos -> neg through the device (same convention as the stamps).
+     *
+     * Default: no noise (ideal capacitors, inductors and sources).
+     */
+    virtual void loadNoiseSources(const NoiseContext& ctx,
+                                  std::vector<NoiseSource>& out) const {
+        (void)ctx; (void)out;
     }
 
     /**

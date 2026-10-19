@@ -147,6 +147,26 @@ public:
      */
     void solve(std::vector<double>& xr, std::vector<double>& xi) const;
 
+    /**
+     * @brief Solves the ADJOINT system A^T x = b with the stored factors.
+     *
+     * This is what makes a noise sweep affordable: the transfer from EVERY
+     * noise generator to the output is a row of A^-1, and A^-T·b gives all of
+     * them from ONE solve (symmetry of A), instead of one solve per generator.
+     *
+     * With A = L·U, A^T = U^T·L^T:
+     *   - U^T is upper triangular with diagonal U(j,j), so a forward sweep in
+     *     column order works; the entries of U^T(i,j) = U(j,i) live in column
+     *     i BELOW its diagonal — the compact-LU subdiagonal slot shared with L;
+     *   - L^T is upper triangular with UNIT diagonal, so a backward sweep in
+     *     reverse column order finishes with no division.
+     * Cost: two passes over nnz(L) plus n complex divisions — no extra
+     * factorization, no transposed copy of the factors.
+     *
+     * @param xr,xi right-hand side on entry, solution on exit (length n)
+     */
+    void solveTranspose(std::vector<double>& xr, std::vector<double>& xi) const;
+
     // ---------------------------------------------------------------
     // DIAGNOSTICS
     // ---------------------------------------------------------------

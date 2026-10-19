@@ -727,4 +727,25 @@ double Mosfet::getPower() const {
     // (gate draws no DC current; the vg term is identically zero)
 }
 
+// ===============================================================
+// Noise (`.NOISE`)
+// ===============================================================
+// Channel thermal noise (Van der Ziel / SPICE3 MOS1): the drain-to-source
+// current generator has density (8/3)·k·T·gm. gm_ is the transconductance
+// cached by the last evaluation, i.e. exactly the operating-point value that
+// the linearization used. gm <= 0 (cutoff) means no channel noise.
+
+void Mosfet::loadNoiseSources(const NoiseContext& ctx,
+                              std::vector<NoiseSource>& out) const {
+    const double gm = std::fabs(gm_);
+    if (!(gm > 0.0)) return;
+    NoiseSource s;
+    s.label = "thermal";
+    s.pos = rowOf(nodes_[0]);       // drain
+    s.neg = rowOf(nodes_[2]);       // source
+    s.psd_a2 = (8.0 / 3.0) * ctx.boltzmann * ctx.temperature * gm;
+    s.f_exponent = 0.0;
+    out.push_back(s);
+}
+
 } // namespace e_XSpice

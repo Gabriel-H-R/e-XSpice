@@ -125,4 +125,25 @@ double Resistor::getVoltage() const {
     return vp - vn;
 }
 
+// ---------------------------------------------------------------
+// Noise (Johnson-Nyquist): a Norton pair of current-noise density
+//      S_i = 4kT/R   [A^2/Hz]
+// across the resistor. White (frequency independent), so the sweep
+// only has to multiply by the constant computed here.
+// The effective (temperature scaled) resistance is the one the circuit
+// actually has, not the nominal card value.
+// ---------------------------------------------------------------
+
+void Resistor::loadNoiseSources(const NoiseContext& ctx,
+                                std::vector<NoiseSource>& out) const {
+    if (!(conductance_ > 0.0)) return;
+    NoiseSource s;
+    s.label = "thermal";
+    s.pos = rowOf(nodes_[0]);
+    s.neg = rowOf(nodes_[1]);
+    s.psd_a2 = 4.0 * ctx.boltzmann * ctx.temperature * conductance_;
+    s.f_exponent = 0.0;
+    out.push_back(s);
+}
+
 } // namespace e_XSpice

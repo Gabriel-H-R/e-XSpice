@@ -86,6 +86,50 @@ This project explores the intersection of numerical analysis, sparse matrix comp
       On small circuits the sweep is not the bottleneck at all — for a
       401-unknown ladder the whole sweep is ~0.5 ms per frequency, so the
       operating point dominates and neither lever helps.
+  - **Noise (`.NOISE`)** — output/input noise spectral densities and the
+    integrated noise, sharing the `.AC` operating point and frequency engine
+    (`src/analysis/NoiseAnalysis.{h,cpp}`):
+    ```
+    .NOISE V(out[,ref]) <src> (DEC|OCT|LIN) <pts> <fstart> <fstop> [pts_per_summary]
+    ```
+    (`src` may also be written `SRC=V1`, the Xyce spelling, and may be omitted
+    — the first independent voltage source is then used).
+    - **one adjoint solve per frequency serves every generator.** Each noise
+      source is a Norton pair with a PSD known at the operating point, and its
+      transfer to the output is a row of `A⁻¹`. Solving that per generator would
+      cost one linear solve per generator per frequency; by symmetry of `A` a
+      single transposed solve `Aᵀ·x* = e_out` yields **all** of them at once
+      (`H_i = x*[pos] − x*[neg]`). Xyce does the same
+      (`N_ANP_NOISE.C::solveAdjointNOISE_`), so the sweep cost scales with the
+      circuit and not with `sources × unknowns`.
+    - `ComplexSparseLU::solveTranspose()` does that with no extra factorization
+      and no transposed copy of the factors: `Aᵀ = Uᵀ·Lᵀ` is solved as two
+      triangular sweeps that read different halves of the compact column
+      storage (`Uᵀ` above the split, `Lᵀ` below). Verified against a dense
+      pivoted reference on the transposed matrix (residual ~1e-15).
+    - **the generators are evaluated once**, at the operating point
+      (`Device::loadNoiseSources`), as `S(f) = psd·f^(−NF)`: the sweep only
+      applies the frequency factor, with no per-device call per frequency.
+      Covered today: resistor thermal `4kT/R`, diode shot `2q·Id` (+ the series
+      `RS` thermal noise), BJT shot `2q·Ic`/`2q·Ie` (+ `RB`/`RC`/`RE` thermal
+      when the card creates the internal nodes), MOS level-1 channel thermal
+      `(8/3)kT·gm`. Ideal C, L and sources are noiseless.
+    - **the gain does not depend on the netlist's `AC` magnitudes.** The input
+      source is driven with a *unit* phasor (SPICE convention), so `.NOISE`
+      works even when `V1` carries no `AC` spec. It costs one forward solve on
+      the factorization the adjoint solve already needed — and it cannot be
+      taken from the adjoint vector by reciprocity, because the MNA matrix is
+      not symmetric once the ground column is eliminated (measured: the
+      reciprocal answer is off by the source's terminal resistance).
+    - integrals follow SPICE3's `Nintegrate` (piecewise power law in log-log
+      space, the same routine as Xyce's `noiseIntegral`), reported both in V²
+      and as V rms — what a noise budget is quoted in.
+    - **deterministic under parallelism**, like the AC sweep: frequencies are
+      independent and the integral is a sum over the whole sweep. Measured on a
+      401-generator resistor ladder (402 unknowns, 501 frequencies): 2.85 s
+      serial → 1.59 s with 4 OpenMP threads (1.8×) → 1.73 s with 2 ranks →
+      1.30 s with 4 ranks (2.2×), with the CSV **byte-identical** across all
+      four (ctest checks it).
 - **Circuit temperature (`.TEMP <celsius>`, also `.OPTIONS TEMP=`):** re-scales
   every model card that did not pin its own `TEMP=` (SPICE precedence:
   instance > card > circuit) and refreshes the devices that precompute
@@ -131,9 +175,11 @@ e-XSpice/
 │   │   ├── core/       # Model SYSTEM: DeviceModel, ModelCard, ModelRegistry
 │   │   └── core_models/# Model MATH: Diode, Bjt, passives, shared Junction physics
 │   ├── analysis/       # DaeSystem (DAE/NR core), DCAnalysis, DCSweep,
-│   │                   #   TransientAnalysis, ACAnalysis (small-signal)
+│   │                   #   TransientAnalysis, ACAnalysis (small-signal),
+│   │                   #   NoiseAnalysis, SmallSignalLinearization (shared
+│   │                   #   OP + (G,C) + ordering for both frequency engines)
 │   ├── solver/         # DaeMatrix (fixed pattern), StateStore, LinearSolver,
-│   │                   #   ComplexSparseLU (AC factorization)
+│   │                   #   ComplexSparseLU (AC/noise factorization + adjoint)
 │   ├── parallel/       # MPI communicator wrappers and OpenMP pragmas
 │   └── main.cpp        # CLI entry point
 ├── tests/              # CTest suite, incl. analytical physics verification
@@ -160,9 +206,9 @@ e-XSpice/
 
 Every device implements five setup methods (`numExtraUnknowns`,
 `registerJacobianPattern`, `setJacobianSlots`, `registerStates`, `setTopology`) and
-six evaluation methods (`loadF`, `loadQ`, `loadB`, `loadJacobianF`, `loadJacobianQ`,
-`storeState`). Adding a device (JFET, IGBT, …) means implementing those — no
-analysis code needs to change.
+seven evaluation methods (`loadF`, `loadQ`, `loadB`, `loadJacobianF`, `loadJacobianQ`,
+`storeState`, `loadACExcitation` + `loadNoiseSources`). Adding a device (JFET,
+IGBT, …) means implementing those — no analysis code needs to change.
 
 ### The AC path: one linearization, many frequencies
 
@@ -193,6 +239,34 @@ the moment it supports transient: the only addition to the device contract is
 `loadACExcitation` (the phasor on the right-hand side, split into real and
 imaginary vectors so the device layer stays free of `<complex>`). A resistor,
 a MOSFET and a BSIM4 device need no AC code at all.
+
+### The noise path: the same factorization, one transposed solve
+
+```text
+  .NOISE V(out) V1 DEC 20 10 1Meg 1
+      │
+      ▼
+  shared SmallSignalLinearization (OP + (G, C) + ordering — the AC path, verbatim)
+      │
+      ▼
+  Device::loadNoiseSources()  ← ONCE, at the operating point: every generator
+      │                           reports (pos, neg, S(1 Hz), NF)
+      ▼
+  per frequency:
+      factorize(G + jωC)                ← static pattern, symbolic already done
+      solveTranspose(e_out)             ← x* : ONE solve for ALL generators
+      per generator: |x*[pos] - x*[neg]|² · S(f)
+      forward solve with the unit phasor of the input source  ← the gain
+      │
+      ▼
+  S_out, S_in, and SPICE's Nintegrate over the band (per generator and total)
+```
+
+The transposed solve is what makes this affordable: `H_i = e_outᵀ A⁻¹ e_i` is one
+component of `x*`, so a circuit with 401 generators costs exactly the same per
+frequency as one with 1. The generators themselves are computed once at the
+operating point (`S(f) = psd·f^(−NF)` covers thermal, shot and flicker), so the
+sweep does no per-device work at all.
 
 ### The model layer (`src/models/`)
 
@@ -411,17 +485,73 @@ $ ./build/e-XSpice file ac_rc.cir ac_rc.csv
 [ACAnalysis] DEC sweep 51 frequencies, 10 Hz .. 1e+06 Hz
 [ACAnalysis] operating point in 1 Newton iterations
 AC sweep: 51/51 frequencies (last 1e+06 Hz)
-AC analysis completed: 51 frequencies (DEC), 3 unknowns
+AC analysis completed: 51 frequencies (DEC), 3 unknowns, peak of |Vout| = ...
   OP iterations: 1 | factorizations: 51 | LU flops: 485316 | ranks: 1 | time: 0.0006 s
+  Peaks (of the sampled grid — a very high-Q resonance can be narrower than the
+  frequency step):
+    |Vin|_max = 1 (0 dB) at 10 Hz
+    |Vout|_max = 1 (0 dB) at 10 Hz
 
-Magnitude / phase:
-  f=10 Hz: |Vin|=1V@0deg |Vout|=1V@-0.0036deg |I|=6.28e-08A@-90deg
+Magnitude / phase (linear and dB):
+  f=10 Hz: |Vin|=1 (0 dB) @0deg |Vout|=1 (0 dB) @-0.0036deg |I|=6.28e-08 (-124 dB) @-90deg
   ...
-  f=100000 Hz: |Vin|=1V@0deg |Vout|=0.846733V@-32.1419deg |I|=0.000532A@-122.14deg
+  f=100000 Hz: |Vin|=1 (0 dB) @0deg |Vout|=0.846733 (-1.44 dB) @-32.1419deg |I|=0.000532 (-65.5 dB) @-122.14deg
 ```
+
+The log prints **decibels next to the linear magnitude** because a frequency
+response is read in dB: 0 dB is the input level, a roll-off shows as negative
+dB, and a resonance as a positive bump — in linear units both just "decay
+towards zero" and it is impossible to tell whether the response ever crossed
+unity. The peak line reports, per node, the largest magnitude found **over the
+whole sweep** (not the decimated log sample) and where it occurs. Keep in mind
+that it is the peak **of the sampled grid**: a resonance narrower than the
+frequency step (`Q = 1e6` is a 0.16 Hz bandwidth at 159 kHz, while `DEC
+100/decade` steps 3.7 kHz there) shows up as the grid point nearest `f0`, not
+as `Q` — the same in every simulator.
 
 The CSV carries `frequency`, then `<node>_mag` / `<node>_phase` per node and
 `<device>_imag_mag` / `<device>_imag_phase` per branch unknown (`I(V1)`, `I(L1)`).
+
+A noise netlist reuses the same devices and the same operating point:
+
+```spice
+* Resistive divider: exact closed form, S_out = (R1||R2)^2·4kT·(1/R1 + 1/R2)
+V1 in 0 DC 1
+R1 in out 10k
+R2 out 0 10k
+.NOISE V(out) V1 DEC 10 1 1e6 1     <- pts_per_summary = 1 -> per-source columns
+.END
+```
+
+```text
+$ ./build/e-XSpice file noise_divider.cir noise_divider.csv
+Noise analysis completed: 61 frequencies (DEC), 3 unknowns, 2 noise source(s),
+  output noise 9.10386e-06 V rms, input noise 1.82077e-05 V rms
+  OP iterations: 2 | factorizations: 61 | LU flops: 1830 | ranks: 1 | time: 0.0032 s
+
+Integrated noise over the swept band:
+  Output  V(out) = 9.10386e-06 V rms  (8.28803e-11 V^2)
+  Input   referred to V1   = 1.82077e-05 V rms  (3.31521e-10 V^2)
+  Peak of the output PSD = 9.10387e-09 V/sqrt(Hz) at 1 Hz
+
+Noise sources (integrated output contribution):
+  R1 (thermal): 6.4374e-06 V rms, 50%
+  R2 (thermal): 6.4374e-06 V rms, 50%
+
+Noise spectral density (V/sqrt(Hz)):
+  f=1 Hz: onoise=9.10387e-09 inoise=1.82077e-08 |gain|=0.5
+  ...
+```
+
+Checkable against theory: `S_out = (R1‖R2)²·4kT·(1/R1 + 1/R2) = 8.2875e-17 V²/Hz`
+and `S_in = S_out/gain² = 4kT·(R1+R2) = 3.3151e-16 V²/Hz` — the textbook
+equivalent input noise of a resistive divider.
+
+The log leads with the **integrated** numbers (V rms over the band), which is
+what a noise budget is quoted in, then ranks the generators by contribution —
+that ranking is the answer to "what do I fix first". The CSV carries the power
+spectral densities in V²/Hz, `gain_mag`, `gain_phase_deg` and, with
+`pts_per_summary`, one column per generator.
 
 ### Mode 2: Programmatic Examples & MPI
 
@@ -544,7 +674,20 @@ which the CTest suite checks (`AC_Netlist_MPI`, `AC_Netlist_FreqPar`).
         and one linearization per sweep, native complex sparse LU with a static
         fill-in pattern, MNA-correct pivot-safe ordering, frequencies parallel
         over OpenMP/MPI with byte-identical results
-  - [ ] AC extras (`.PRINT`/`.PLOT` column selection, `.NOISE`)
+  - [x] **Noise analysis (`.NOISE`)** - shared operating point and frequency
+        engine, one transposed (adjoint) solve per frequency for every noise
+        generator, SPICE3 integral, per-generator breakdown, parallel with
+        byte-identical results
+  - [x] **DC transfer function (`.TF`)** - DC small-signal gain, input and
+        output resistance from a single linearization at the operating point
+        (two solves on the shared complex LU, the input driven with a unit
+        phasor); `V(node)`, `V(n1,n2)` and `I(dev)` output variables
+  - [ ] Noise extras: flicker noise in the level-1 MOS card (`KF`/`AF`/`NF`) and
+        the BSIM4 unified flicker model (`EF`), correlated BJT noise (`T0/T2/T3`),
+        `DATA=` table sweeps
+  - [ ] AC extras (`.PRINT`/`.PLOT` column selection)
+  - [ ] `.TF` extras (output resistance for `I(dev)` outputs is reported as a
+        magnitude; the sign convention for active devices is documented)
   - [x] MOSFET BSIM4 model (level 14, Berkeley-derived level-2 core)
   - [ ] Preconditioning (ILU)
   - [ ] Graph partitioning (METIS) - and, for the AC path, a row-distributed

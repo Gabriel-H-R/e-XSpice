@@ -10,6 +10,7 @@
 #include "../core/Device.h"
 #include "../parallel/MPIManager.h"
 #include "../solver/ComplexSparseLU.h"
+#include "SmallSignalLinearization.h"
 
 #include <algorithm>
 #include <chrono>
@@ -140,196 +141,53 @@ ACResult ACAnalysis::run(bool use_mpi) {
                   << fstop_ << " Hz" << std::endl;
     }
 
-    // ---- operating point ------------------------------------------------
-    // The AC analysis owns its operating point (SPICE/Xyce always compute
-    // one before the sweep) and builds ONE DaeSystem for the whole sweep.
-    DaeSystem system(circuit_);
-    // Frequency distribution replicates the same (G, C) on every rank, so
-    // the inner device/row distribution is disabled in that mode.
-    system.setMPIManager((use_mpi && !distribute) ? &mpi : nullptr);
-    system.setup();
-    system.setMaxIterations(max_iterations_);
-    system.setRelTol(1e-3);
-    system.setAbsTol(std::max(1e-12, tolerance_ * 1e-3));
-    system.setGminSchedule(1e-3, 1e-12);
-    system.setSolverType(SolverType::BICGSTAB);
-    system.setVerbose(verbose_);
-    system.beginSolve(/*initial_solve=*/true);
-    system.resetSolveStats();
-
+    // ---- operating point + linearization --------------------------------
+    // The AC analysis owns its operating point (SPICE/Xyce always compute one
+    // before the sweep). SmallSignalLinearization does the whole preparation —
+    // OP solve, (G, C) snapshot, ground elimination, pivot-safe ordering — and
+    // is the SAME object the noise analysis uses, so both analyses provably
+    // see the same frequency system.
     const auto t0 = std::chrono::high_resolution_clock::now();
 
-    const NLSolveResult nl = system.solveNonlinear(/*time=*/0.0,
-                                                   /*q_coeff=*/0.0,
-                                                   /*use_history=*/false);
-    if (!nl.converged) {
-        result.success = false;
-        result.message = "operating point did not converge: " + nl.message;
-        result.stats.elapsed_seconds =
-            std::chrono::duration<double>(
-                std::chrono::high_resolution_clock::now() - t0).count();
-        if (rank == 0) std::cerr << result.message << std::endl;
-        return result;
+    SmallSignalLinearization lin;
+    {
+        SmallSignalLinearization::Options opt;
+        opt.max_iterations = max_iterations_;
+        opt.abs_tol = std::max(1e-12, tolerance_ * 1e-3);
+        opt.verbose = verbose_ && rank == 0;
+        opt.use_distributed_layout = (use_mpi && !distribute);
+        if (!lin.prepare(circuit_, opt)) {
+            result.success = false;
+            result.message = lin.message();
+            result.stats.elapsed_seconds =
+                std::chrono::duration<double>(
+                    std::chrono::high_resolution_clock::now() - t0).count();
+            if (rank == 0) std::cerr << result.message << std::endl;
+            return result;
+        }
     }
-    system.extractSolution();
-    result.stats.newton_iterations = nl.total_iterations;
+    result.stats.newton_iterations = lin.newtonIterations();
 
     if (verbose_ && rank == 0) {
         std::cout << "[ACAnalysis] operating point in "
-                  << nl.total_iterations << " Newton iterations"
+                  << result.stats.newton_iterations << " Newton iterations"
                   << std::endl;
     }
 
-    // ---- linearization at the operating point ---------------------------
-    // One refresh so (G, C) belong to the CONVERGED point (the Newton loop
-    // returns with the Jacobians of the previous iterate), then the pair is
-    // snapshotted: dF/dx and dQ/dx share the CSR pattern, so the frequency
-    // sweep just rescales C by w.
-    system.refreshLinearization();
-    const DaeMatrix& G = system.jacobianF();
-    const DaeMatrix& C = system.jacobianQ();
+    const int n_full = lin.fullSize();
+    const int num_node_rows = lin.numNodeRows();
+    const int nn = lin.size();
 
-    const int n_full = system.size();
-    const int num_node_rows = std::max(0, system.numNodeRows());
-
-    // ---- ground elimination ---------------------------------------------
-    // The DAE allocates a row/column for the ground node (that is how the
-    // nonlinear solver keeps the system square, with a tiny gmin on its
-    // diagonal). For the FREQUENCY system ground is not an unknown at all:
-    // x(gnd) = 0, so its row (structurally empty) and the -g·x(gnd) entries
-    // of its column disappear. Keeping them would leave a structurally zero
-    // row that no no-pivot factorization can handle without perturbation, and
-    // the perturbation would leak into the other unknowns (measured: 5e-7
-    // error on a pinned source node). Eliminating it here is the textbook
-    // MNA treatment and makes the AC matrix exactly the small-signal system.
-    int gnd_row = -1;
-    {
-        const auto& nodes = circuit_.getNodes();
-        const auto& node_map = system.nodeMap();
-        for (const auto& n : nodes) {
-            if (!n->isGround()) continue;
-            const int id = n->getId();
-            if (id >= 0 && id < static_cast<int>(node_map.size())) {
-                gnd_row = node_map[static_cast<size_t>(id)];
-            }
-            break;
-        }
-    }
-
-    // Full row -> AC row (-1 for the eliminated ground row).
     std::vector<int> ac_of_row(static_cast<size_t>(n_full), -1);
-    std::vector<int> row_of_ac;
-    row_of_ac.reserve(static_cast<size_t>(n_full));
-    for (int r = 0; r < n_full; ++r) {
-        if (r == gnd_row) continue;
-        ac_of_row[static_cast<size_t>(r)] = static_cast<int>(row_of_ac.size());
-        row_of_ac.push_back(r);
-    }
-    const int nn = static_cast<int>(row_of_ac.size());
-    if (nn <= 0) {
-        result.success = false;
-        result.message = "nothing to solve: the circuit has no unknowns";
-        return result;
-    }
+    std::vector<int> row_of_ac(static_cast<size_t>(n_full), -1);
+    for (int r = 0; r < n_full; ++r) ac_of_row[static_cast<size_t>(r)] = lin.acRow(r);
+    for (int k = 0; k < nn; ++k) row_of_ac[static_cast<size_t>(k)] = lin.fullRow(k);
 
-    // Filtered CSR (same pattern, ground row/column dropped) plus the matching
-    // value vectors: one O(nnz) pass, done once for the whole sweep.
-    std::vector<int> ac_row_ptr(static_cast<size_t>(nn) + 1, 0);
-    std::vector<int> ac_col_idx;
-    std::vector<double> g_vals;
-    std::vector<double> c_vals;
-    {
-        const std::vector<int>& rp = G.rowPointers();
-        const std::vector<int>& ci = G.colIndices();
-        const std::vector<double>& gv = G.values();
-        const std::vector<double>& cv = C.values();
-        ac_col_idx.reserve(gv.size());
-        g_vals.reserve(gv.size());
-        c_vals.reserve(gv.size());
-        for (int i = 0; i < nn; ++i) {
-            const int r = row_of_ac[static_cast<size_t>(i)];
-            ac_row_ptr[static_cast<size_t>(i)] = static_cast<int>(ac_col_idx.size());
-            for (int p = rp[r]; p < rp[r + 1]; ++p) {
-                const int c = ci[static_cast<size_t>(p)];
-                if (c == gnd_row) continue;      // -g·x(gnd) term disappears
-                ac_col_idx.push_back(c);
-                g_vals.push_back(gv[static_cast<size_t>(p)]);
-                c_vals.push_back(cv[static_cast<size_t>(p)]);
-            }
-        }
-        ac_row_ptr[static_cast<size_t>(nn)] = static_cast<int>(ac_col_idx.size());
-    }
-
-    // ---- pivot-safe ordering --------------------------------------------
-    // The frequency system must have a usable diagonal in every column before
-    // a no-pivot factorization can touch it: MNA rows like a node wired only
-    // to sources/inductors have none. A static ROW permutation fixes that
-    // with NO fill-in and without perturbing the physics. It is decided once,
-    // from the matrix at the first frequency (the DAE pattern declares a
-    // diagonal slot for every row, so the values are what tell a real
-    // self-term from an empty one) and then frozen for the whole sweep.
-    // Branch rows are preferred partners: their couplings are the ±1 of a
-    // branch equation, so they make a well-scaled pivot.
-    std::vector<int> priority(static_cast<size_t>(nn), 0);
-    for (int k = 0; k < (n_full - num_node_rows); ++k) {
-        const int a = ac_of_row[static_cast<size_t>(num_node_rows + k)];
-        if (a >= 0) priority[static_cast<size_t>(a)] = 1;
-    }
-    std::vector<double> ref_re(ac_col_idx.size());
-    std::vector<double> ref_im(ac_col_idx.size());
-    {
-        const double omega_ref = kPi2 * grid.front();
-        for (size_t p = 0; p < ac_col_idx.size(); ++p) {
-            ref_re[p] = g_vals[p];
-            ref_im[p] = omega_ref * c_vals[p];
-        }
-    }
-    const StaticRowPermutation perm =
-        StaticRowPermutation::build(ac_row_ptr, ac_col_idx, ref_re, ref_im,
-                                    priority);
-    if (!perm.ok) {
-        result.success = false;
-        result.message = "AC system cannot be ordered for factorization: " +
-                         perm.reason;
-        if (rank == 0) std::cerr << result.message << std::endl;
-        return result;
-    }
-    if (perm.weak_diagonals > 0 && verbose_ && rank == 0) {
-        std::cout << "[ACAnalysis] pivot-safe ordering: " << perm.weak_diagonals
-                  << " column(s) without a self-term reordered ("
-                  << perm.swaps << " row swap(s))" << std::endl;
-    }
-    // Apply the row permutation to the pattern AND the value vectors.
-    //
-    // Note what a row permutation does and does not touch: it reorders the
-    // EQUATIONS (A' = P·A, b' = P·b, same solution x), and the solution x[j]
-    // belongs to COLUMN j. So the variable maps (row_of_ac / ac_of_row) stay
-    // on the original indexing and the reporting is unaffected; only the
-    // right-hand side has to follow the rows, which happens when the
-    // excitation is assembled below.
-    {
-        std::vector<int> new_rp(static_cast<size_t>(nn) + 1, 0);
-        std::vector<int> new_ci;
-        std::vector<double> g2, c2;
-        new_ci.reserve(ac_col_idx.size());
-        g2.reserve(g_vals.size());
-        c2.reserve(c_vals.size());
-        for (int k = 0; k < nn; ++k) {
-            new_rp[static_cast<size_t>(k)] = static_cast<int>(g2.size());
-            const int src = perm.row_of_pos[static_cast<size_t>(k)];
-            for (int p = ac_row_ptr[static_cast<size_t>(src)];
-                 p < ac_row_ptr[static_cast<size_t>(src) + 1]; ++p) {
-                new_ci.push_back(ac_col_idx[static_cast<size_t>(p)]);
-                g2.push_back(g_vals[static_cast<size_t>(p)]);
-                c2.push_back(c_vals[static_cast<size_t>(p)]);
-            }
-        }
-        new_rp[static_cast<size_t>(nn)] = static_cast<int>(g2.size());
-        ac_row_ptr.swap(new_rp);
-        ac_col_idx.swap(new_ci);
-        g_vals.swap(g2);
-        c_vals.swap(c2);
-    }
+    const std::vector<int>&    ac_row_ptr = lin.rowPointers();
+    const std::vector<int>&    ac_col_idx = lin.colIndices();
+    const std::vector<double>& g_vals = lin.gValues();
+    const std::vector<double>& c_vals = lin.cValues();
+    const StaticRowPermutation& perm = lin.permutation();
 
     // Branch-current labels: extra unknowns are assigned in device order (row
     // num_node_rows + k), so I(V1) / I(L1) ... line up with this list.
@@ -349,8 +207,9 @@ ACResult ACAnalysis::run(bool use_mpi) {
     for (const auto& n : circuit_.getNodes()) {
         if (n->isGround()) continue;
         const int id = n->getId();
-        const int row = (id >= 0 && id < static_cast<int>(system.nodeMap().size()))
-                            ? system.nodeMap()[static_cast<size_t>(id)] : -1;
+        const auto& node_map = lin.system().nodeMap();
+        const int row = (id >= 0 && id < static_cast<int>(node_map.size()))
+                            ? node_map[static_cast<size_t>(id)] : -1;
         node_ac_row.push_back(ac_of_row[static_cast<size_t>(row < 0 ? 0 : row)]);
     }
     const int n_nodes_reported = static_cast<int>(node_ac_row.size());
@@ -376,14 +235,8 @@ ACResult ACAnalysis::run(bool use_mpi) {
         for (const auto& d : circuit_.getDevices()) {
             d->loadACExcitation(1.0, full_re, full_im);
         }
-        for (int i = 0; i < nn; ++i) {
-            // position i now holds the equation of full row
-            // row_of_ac[perm.row_of_pos[i]]: the RHS follows the rows.
-            const int r = row_of_ac[static_cast<size_t>(
-                perm.row_of_pos[static_cast<size_t>(i)])];
-            b_re[static_cast<size_t>(i)] = full_re[static_cast<size_t>(r)];
-            b_im[static_cast<size_t>(i)] = full_im[static_cast<size_t>(r)];
-        }
+        b_re = lin.permuteRhs(full_re);
+        b_im = lin.permuteRhs(full_im);
     }
 
     // ---- retention ------------------------------------------------------
@@ -400,7 +253,7 @@ ACResult ACAnalysis::run(bool use_mpi) {
 
     if (std::getenv("EXSPICE_DEBUG_AC")) {
         std::fprintf(stderr, "[AC] n_full=%d gnd_row=%d nn=%d perm=", n_full,
-                     gnd_row, nn);
+                     lin.groundRow(), nn);
         for (int k = 0; k < nn; ++k) {
             std::fprintf(stderr, " %d", perm.row_of_pos[static_cast<size_t>(k)]);
         }
@@ -453,6 +306,11 @@ ACResult ACAnalysis::run(bool use_mpi) {
     const bool parallel = (nthreads > 1) && (n_local > 1);
     const int nslots = parallel ? std::min(nthreads, n_local) : 1;
 
+    // Per-node peak accumulators (filled by report()).
+    result.stats.node_peak_mag.assign(static_cast<size_t>(n_nodes_reported), 0.0);
+    result.stats.node_peak_db.assign(static_cast<size_t>(n_nodes_reported), 0.0);
+    result.stats.node_peak_freq.assign(static_cast<size_t>(n_nodes_reported), 0.0);
+
     std::vector<ComplexSparseLU> lus(static_cast<size_t>(nslots));
     for (int s = 0; s < nslots; ++s) {
         // The symbolic factorization runs once per slot; every frequency then
@@ -500,6 +358,23 @@ ACResult ACAnalysis::run(bool use_mpi) {
                 std::atan2(im, re) * kDegPerRad;
         }
         writeHeader();
+        // Resonance summary: tracked over EVERY solved frequency (not the
+        // decimated sample), so a long sweep still reports its true peak.
+        for (int i = 0; i < n_nodes_reported; ++i) {
+            const size_t ui = static_cast<size_t>(i);
+            const double m = p.mag[ui];
+            if (m > result.stats.node_peak_mag[ui]) {
+                result.stats.node_peak_mag[ui] = m;
+                result.stats.node_peak_db[ui] = p.db[ui];
+                result.stats.node_peak_freq[ui] = f;
+            }
+            if (m > result.stats.peak_mag) {
+                result.stats.peak_mag = m;
+                result.stats.peak_db = p.db[ui];
+                result.stats.peak_frequency = f;
+                result.stats.peak_node = i;
+            }
+        }
         if (csv_) {
             *csv_ << f;
             for (int i = 0; i < n_nodes_reported; ++i) {
@@ -694,6 +569,15 @@ ACResult ACAnalysis::run(bool use_mpi) {
     }
     if (perturbed_any) {
         result.message += " [pivot perturbation applied]";
+    }
+    if (result.stats.peak_node >= 0) {
+        result.message += ", peak of |" +
+                          (result.stats.peak_node < static_cast<int>(csv_labels_.size())
+                               ? csv_labels_[static_cast<size_t>(result.stats.peak_node)]
+                               : std::string("node?")) +
+                          "| = " + std::to_string(result.stats.peak_mag) +
+                          " (" + std::to_string(result.stats.peak_db) + " dB) at " +
+                          std::to_string(result.stats.peak_frequency) + " Hz";
     }
     return result;
 }

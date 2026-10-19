@@ -104,6 +104,13 @@ public:
      */
     double getVoltage() const;
 
+    /**
+     * @brief Thermal (Johnson-Nyquist) noise generator: 4kT/R in parallel
+     *        with the resistor, current flowing from node[0] to node[1].
+     */
+    void loadNoiseSources(const NoiseContext& ctx,
+                          std::vector<NoiseSource>& out) const override;
+
 private:
     double resistance_;   // Nominal instance resistance (Ω)
     double conductance_;  // Effective conductance (S) = 1/(R·factor)

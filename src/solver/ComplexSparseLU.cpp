@@ -333,6 +333,28 @@ bool ComplexSparseLU::factorize(double omega, const double* G, const double* C) 
         double pi = acc_im_[static_cast<size_t>(j)];
         double pmag = std::sqrt(pr * pr + pi * pi);
         if (pmag < pivot_floor) {
+            // One diagnostic per PROCESS, not per frequency: a sweep would
+            // otherwise print it once per point. An EXACTLY zero pivot is the
+            // signature of a node with no DC path (a floating node, or a
+            // sub-network connected only through capacitors), not of a merely
+            // ill-conditioned system — say so, because that is the netlist bug
+            // the user has to fix.
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                if (pmag == 0.0) {
+                    std::fprintf(stderr,
+                                 "[LU] pivot at column %d is exactly zero: the "
+                                 "system has a floating node / no DC path to "
+                                 "ground (column %d of %d)\n",
+                                 j, j, n_);
+                } else {
+                    std::fprintf(stderr,
+                                 "[LU] pivot perturbed at column %d "
+                                 "(|pivot| = %.3e < %.3e)\n",
+                                 j, pmag, pivot_floor);
+                }
+            }
             perturbed_ = true;
             const double target = pivot_floor * 10.0;
             int slot = -1;
@@ -448,6 +470,80 @@ void ComplexSparseLU::solve(std::vector<double>& xr,
             xr[static_cast<size_t>(r)] -= ur * xj - ui * xij;
             xi[static_cast<size_t>(r)] -= ur * xij + ui * xj;
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Adjoint solve
+// ---------------------------------------------------------------------------
+// With A = L·U we have A^T = U^T·L^T, so putting y = L^T·x the system
+// A^T x = b is solved as
+//
+//     U^T y = b    (FIRST),   then   L^T x = y.
+//
+// Both transposes are triangular in the direction OPPOSITE to the factor they
+// come from:
+//
+//     U^T(i,j) = U(j,i) != 0 for j <= i   ->  LOWER triangular (pivot)
+//     L^T(j,i) = L(i,j) != 0 for i >= j   ->  UPPER triangular, unit diagonal
+//
+// and they read DIFFERENT halves of the compact column storage:
+//
+//     U^T reads the entries ABOVE the split (rows < column, factors ux_)
+//     L^T reads the entries BELOW the split (rows > column, factors lx_)
+//
+// Cost: two passes over nnz(L) plus n complex divisions, with NO extra
+// factorization and no transposed copy of the factors. This is what makes the
+// noise sweep scale with the circuit size instead of with
+// (sources x unknowns): every generator's transfer to the output is one entry
+// of this single solution.
+
+void ComplexSparseLU::solveTranspose(std::vector<double>& xr,
+                                     std::vector<double>& xi) const {
+    if (n_ == 0) return;
+
+    // ---- 1) U^T y = b: lower triangular, forward substitution -------------
+    for (int i = 0; i < n_; ++i) {
+        const int cb = lcol_ptr_[static_cast<size_t>(i)];
+        const int split = lcol_split_[static_cast<size_t>(i)];
+        double sr = xr[static_cast<size_t>(i)];
+        double si = xi[static_cast<size_t>(i)];
+        for (int p = cb; p < split; ++p) {
+            const int j = lcol_idx_[static_cast<size_t>(p)];   // j < i
+            const double ur = ux_re_[static_cast<size_t>(p)];  // U(j,i)
+            const double ui = ux_im_[static_cast<size_t>(p)];
+            const double yr = xr[static_cast<size_t>(j)];      // y_j is final
+            const double yi = xi[static_cast<size_t>(j)];
+            sr -= ur * yr - ui * yi;
+            si -= ur * yi + ui * yr;
+        }
+        const int dpos = udiag_[static_cast<size_t>(i)];
+        if (dpos < 0) continue;
+        const double dr = ux_re_[static_cast<size_t>(dpos)];   // U(i,i)
+        const double di = ux_im_[static_cast<size_t>(dpos)];
+        const double den = dr * dr + di * di;
+        if (!(den > 0.0)) continue;
+        xr[static_cast<size_t>(i)] = (sr * dr + si * di) / den;
+        xi[static_cast<size_t>(i)] = (si * dr - sr * di) / den;
+    }
+
+    // ---- 2) L^T x = y: upper triangular, UNIT diagonal (no division) ------
+    for (int j = n_ - 1; j >= 0; --j) {
+        const int lb = lcol_split_[static_cast<size_t>(j)];
+        const int le = lcol_ptr_[static_cast<size_t>(j) + 1];
+        double sx = xr[static_cast<size_t>(j)];
+        double sxj = xi[static_cast<size_t>(j)];
+        for (int p = lb + 1; p < le; ++p) {
+            const int i = lcol_idx_[static_cast<size_t>(p)];   // i > j
+            const double lr = lx_re_[static_cast<size_t>(p)];  // L(i,j)
+            const double li = lx_im_[static_cast<size_t>(p)];
+            const double xri = xr[static_cast<size_t>(i)];    // x_i is final
+            const double xii = xi[static_cast<size_t>(i)];
+            sx -= lr * xri - li * xii;
+            sxj -= lr * xii + li * xri;
+        }
+        xr[static_cast<size_t>(j)] = sx;
+        xi[static_cast<size_t>(j)] = sxj;
     }
 }
 

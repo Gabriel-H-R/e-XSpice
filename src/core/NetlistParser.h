@@ -56,7 +56,9 @@ enum class AnalysisType {
     DC_OP,        // .OP
     TRANSIENT,    // .TRAN
     AC,           // .AC
-    DC_SWEEP      // .DC
+    DC_SWEEP,     // .DC
+    NOISE,        // .NOISE
+    TF            // .TF
 };
 
 /**
@@ -72,17 +74,34 @@ struct AnalysisParameters {
     bool want_tran = false;   // .TRAN seen
     bool want_dc_sweep = false;  // .DC sweep seen
     bool want_ac = false;       // .AC seen
-    
+    bool want_noise = false;    // .NOISE seen
+    bool want_tf = false;       // .TF seen
+
+    // Transfer function (.TF): OUTVAR INVAR (both tokens reassembled).
+    std::string tf_out_var;
+    std::string tf_input_source;
+
     // Transient analysis
     double tran_tstep = 0.0;    // Time step
     double tran_tstop = 0.0;    // Final time
     double tran_tstart = 0.0;   // Initial time (optional)
-    
+
     // AC analysis
     std::string ac_variation = "DEC";  // DEC, OCT, LIN
     int ac_points = 10;
     double ac_fstart = 1.0;
     double ac_fstop = 1e6;
+
+    // Noise analysis (.NOISE) — SPICE3/ngspice/Xyce card:
+    //   .NOISE V(out[,ref]) <src> (DEC|OCT|LIN) <pts> <fstart> <fstop>
+    //         [pts_per_summary]
+    // The sweep reuses the AC fields; only the output, the input source and
+    // the contribution flag are new.
+    std::string noise_out_node;
+    std::string noise_ref_node = "0";
+    std::string noise_source;        // empty = first independent V source
+    bool noise_source_given = false;
+    bool noise_detail = false;       // pts_per_summary > 0
     
     // DC sweep (.DC [LIN|DEC|OCT] <source> <start> <stop> <step|points>)
     // LIN is the default when the keyword is omitted (.DC VIN -10 15 1).

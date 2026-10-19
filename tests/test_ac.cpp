@@ -294,6 +294,16 @@ static void testRlcResonance() {
         check(peak < Q + 1e-9 && peak > Q * 0.99,
               "peak magnitude is just below Q (grid resolution)");
     }
+
+    // The peak the CLI prints is tracked inside the analysis (over EVERY
+    // frequency, so a decimated sample cannot lose it). It must agree with a
+    // re-scan of the retained points.
+    check(res.stats.peak_node >= 0, "stats report a peak node");
+    checkNear(res.stats.node_peak_freq[static_cast<size_t>(out_i)],
+              res.points[peak_i].frequency, 0.0,
+              "reported peak frequency matches the sampled peak");
+    checkNear(res.stats.node_peak_mag[static_cast<size_t>(out_i)], peak, 1e-12,
+              "reported peak magnitude matches the sampled peak");
 }
 
 // ===============================================================

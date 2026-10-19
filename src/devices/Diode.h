@@ -149,6 +149,20 @@ public:
      */
     const DiodeInstanceParams& instanceParams() const { return inst_; }
 
+// ---- noise (`.NOISE`) ----
+    /**
+     * @brief Junction current from the last evaluation, i.e. the operating
+     *        point current EXCLUDING the series resistance branch.
+     */
+    double junctionCurrent() const { return id_limited_; }
+
+    /**
+     * @brief Shot noise 2q·Id across the junction and, when RS > 0, the
+     *        thermal noise 4kT/RS of the series resistance.
+     */
+    void loadNoiseSources(const NoiseContext& ctx,
+                          std::vector<NoiseSource>& out) const override;
+
 private:
     RCP<const DiodeModel> model_;   // shared card (never null)
     DiodeInstanceParams   inst_;    // per-instance overrides

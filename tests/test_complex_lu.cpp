@@ -287,6 +287,95 @@ int main() {
         checkClose("agreement with the pivoted dense reference", worst2, 0.0, 1e-8);
     }
 
+    // ---- 1c) ADJOINT solve: A^T x = b -------------------------------------
+    // The noise analysis gets every generator's transfer from ONE transposed
+    // solve, so this path must be as trustworthy as the forward one. It is
+    // checked two ways: the true residual ||A^T x - b||, and agreement with the
+    // independent dense reference applied to the TRANSPOSED matrix (a transposed
+    // matrix is generally unsymmetric and badly scaled, so it is solved by the
+    // pivoting reference, not by the same no-pivot routine).
+    {
+        std::printf("\n1c) Adjoint solve (A^T x = b)\n");
+        double worst_r = 0.0, worst_x = 0.0;
+        int tested = 0;
+        for (int n : {8, 17, 40, 96}) {
+            for (int perRow : {3, 5, 9}) {
+                for (unsigned seed = 1; seed <= 3; ++seed) {
+                    const double omega =
+                        2.0 * 3.14159265358979 * 1000.0 * seed;
+                    SparseCase c = randomCase(n, perRow, seed * 104729u,
+                                              omega, true);
+                    ComplexSparseLU lu;
+                    lu.setPattern(c.rowPtr, c.colIdx);
+                    if (!lu.factorize(omega, c.G.data(), c.C.data())) continue;
+                    std::vector<double> xr(c.rhs.size()), xi(c.rhs.size());
+                    for (size_t i = 0; i < c.rhs.size(); ++i) {
+                        xr[i] = c.rhs[i].real();
+                        xi[i] = c.rhs[i].imag();
+                    }
+                    lu.solveTranspose(xr, xi);
+
+                    // (a) true residual of A^T x = b.
+                    std::vector<double> axr(static_cast<size_t>(n), 0.0);
+                    std::vector<double> axi(static_cast<size_t>(n), 0.0);
+                    double bnorm = 0.0;
+                    for (int i = 0; i < n; ++i) {          // column i of A
+                        for (int p = c.rowPtr[i]; p < c.rowPtr[i + 1]; ++p) {
+                            const int j = c.colIdx[static_cast<size_t>(p)];
+                            const double gr = c.G[static_cast<size_t>(p)];
+                            const double gi = omega * c.C[static_cast<size_t>(p)];
+                            // row j, col i of A^T: (gr + j gi)(xr[i] + j xi[i])
+                            axr[static_cast<size_t>(j)] +=
+                                gr * xr[static_cast<size_t>(i)] -
+                                gi * xi[static_cast<size_t>(i)];
+                            axi[static_cast<size_t>(j)] +=
+                                gr * xi[static_cast<size_t>(i)] +
+                                gi * xr[static_cast<size_t>(i)];
+                        }
+                    }
+                    for (int i = 0; i < n; ++i) {
+                        const double rr = std::hypot(
+                            axr[static_cast<size_t>(i)] - c.rhs[i].real(),
+                            axi[static_cast<size_t>(i)] - c.rhs[i].imag());
+                        worst_r = std::max(worst_r, rr);
+                        bnorm = std::max(bnorm, std::abs(c.rhs[i]));
+                    }
+                    if (bnorm > 0.0) worst_r /= bnorm;
+
+                    // (b) dense pivoted reference on A^T.
+                    std::vector<std::complex<double>> at(
+                        static_cast<size_t>(n) * static_cast<size_t>(n),
+                        std::complex<double>(0.0, 0.0));
+                    for (int i = 0; i < n; ++i) {
+                        for (int p = c.rowPtr[i]; p < c.rowPtr[i + 1]; ++p) {
+                            const int j = c.colIdx[static_cast<size_t>(p)];
+                            at[static_cast<size_t>(j) * static_cast<size_t>(n) +
+                               static_cast<size_t>(i)] = c.dense[
+                                static_cast<size_t>(i) * static_cast<size_t>(n) +
+                                static_cast<size_t>(j)];
+                        }
+                    }
+                    std::vector<std::complex<double>> ref;
+                    if (!denseSolve(at, c.rhs, ref)) continue;
+                    ++tested;
+                    for (size_t i = 0; i < ref.size(); ++i) {
+                        worst_x = std::max(
+                            worst_x,
+                            std::abs(std::complex<double>(xr[i], xi[i]) - ref[i]));
+                    }
+                }
+            }
+        }
+        checkTrue("transposed systems solved", tested >= 24);
+        std::printf("       worst relative residual ||A^T x - b|| = %.3e\n",
+                    worst_r);
+        std::printf("       worst |x_sparse - x_dense_pivot^T|   = %.3e\n",
+                    worst_x);
+        checkClose("transposed solve residual", worst_r, 0.0, 1e-10);
+        checkClose("adjoint agrees with the pivoted dense reference", worst_x,
+                   0.0, 1e-8);
+    }
+
     // ---- 2) analytic RC low-pass -----------------------------------------
     // V1 -R- in/out -C- gnd,  unknowns x = [v(in), v(out), i(V1)]
     //   node in  : (v_in - v_out)/R + i         = 0

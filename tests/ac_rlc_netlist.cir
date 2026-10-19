@@ -1,11 +1,28 @@
-* AC analysis on an MNA circuit (source + inductor + resistor).
+* AC analysis on an MNA circuit: series RLC, output across C1.
+*
+*   V1 in 0 DC 0 AC 1
+*   L1 in n2 1e-3      1 mH
+*   R1 n2 out 1m       1 mOhm
+*   C1 out 0 1n        1 nF
+*
 * Node `in` has NO self-term in its KCL row (i(V1) + i(L1) = 0): the case that
 * needs a pivot-safe ordering in the small-signal matrix.
-* Output across R1 (V1 -> L1 -> R1 -> gnd): |H| = R / |R + jwL|,
-* phase = -atan(wL/R), with L = 1 mH and R = 1 ohm.
 *
+* Closed form: H(s) = V(out)/V(in) = 1 / (1 + sRC + s^2 LC)
+*   f0 = 1/(2*pi*sqrt(LC)) = 159.155 kHz      <- the peak
+*   Q  = sqrt(L/C)/R       = 1e6             <- 120 dB, but see below
+*   |H| = 1 (0 dB) again at sqrt(2)*f0 = 225.1 kHz, then it falls as 1/f^2
+*   (-40 dB/decade: +4.86 dB at 199.5 kHz, -31.7 dB at 1 MHz).
+*
+* The bandwidth is f0/Q = 0.159 Hz, while DEC 100/decade steps 3.7 kHz at f0, so
+* the sweep CANNOT resolve the peak: 119.8 is the grid point nearest f0, not
+* the true Q. Every simulator shows the same sampled peak for this sweep —
+* refine the sweep (LIN, or a few thousand points) to see the real one.
+
+
 V1 in 0 DC 0 AC 1
-L1 in out 1e-3
-R1 out 0 1
-.AC DEC 10 100 1e6
+L1 in n2 1e-3
+R1 n2 out 1m
+C1 out 0 1n
+.AC DEC 100 100 1meg
 .END
