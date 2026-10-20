@@ -7,6 +7,7 @@
 #include "Capacitor.h"
 #include "../core/DaeSolution.h"
 #include "../solver/DaeMatrix.h"
+#include <complex>
 #include <stdexcept>
 
 namespace e_XSpice {
@@ -131,6 +132,70 @@ void Capacitor::loadJacobianQ(DaeMatrix& J, const DaeSolution& x,
     emit(J, 1, -capacitance_);   // [p][n]
     emit(J, 3, -capacitance_);   // [n][p]
     emit(J, 4,  capacitance_);   // [n][n]
+}
+
+// ---------------------------------------------------------------
+// Sensitivity (`.SENS`): the right-hand-side perturbation w.
+//
+// The capacitor is a pure CHARGE device: F is empty and the charge is
+//
+//   Q[pos] += C·(v+ - v-),  Q[neg] -= C·(v+ - v-)
+//
+// so dQ/dC = (v+ - v-) at pos and -(v+ - v-) at neg, and the effective
+// system A = G + ξ·C carries the capacitance only through ξ:
+//
+//   w = -ξ·(dC/dC)·X  =>  w[pos] = -ξ·(v+ - v-),  w[neg] = +ξ·(v+ - v-)
+//
+// with ξ = j·ω (AC) or 2/dt, 1/dt (transient) and 0 (DC, where a
+// capacitor has no effect at all).
+//
+// TRANSIENT HISTORY: the step equation also contains the accepted charge
+// of the previous step (s·Q_n), whose derivative w.r.t. C is
+//
+//   dQ_n/dp = C·(Y_n[pos] - Y_n[neg]) + vcap_n
+//
+// (the first term is the trajectory dependence, the second the explicit
+// dependence of the stored charge on C). It is added at the same rows and
+// with the same signs as loadQ/loadChargeHistory.
+// ---------------------------------------------------------------
+bool Capacitor::loadSensitivity(const std::string& param_name,
+                                const DaeSolution& x,
+                                const SensitivityContext& ctx,
+                                std::vector<double>& w_re,
+                                std::vector<double>& w_im,
+                                std::vector<double>& dqdp_re) const {
+    if (param_name != "C" && param_name != "c") return false;
+    if (inICMode()) return false;    // the IC-OP has no charge term
+
+    const std::complex<double> xi = ctx.coeff();
+    const int ip = rowOf(nodes_[0]);
+    const int in = rowOf(nodes_[1]);
+    const std::complex<double> dv =
+        (ip >= 0 ? x.valueAt(ip) : std::complex<double>(0.0, 0.0)) -
+        (in >= 0 ? x.valueAt(in) : std::complex<double>(0.0, 0.0));
+
+    // ---- instantaneous part: w = -ξ·dv -----------------------------------
+    if (xi != std::complex<double>(0.0, 0.0)) {
+        const std::complex<double> w = -xi * dv;
+        if (ip >= 0) {
+            w_re[static_cast<size_t>(ip)] += w.real();
+            w_im[static_cast<size_t>(ip)] += w.imag();
+        }
+        if (in >= 0) {
+            w_re[static_cast<size_t>(in)] -= w.real();
+            w_im[static_cast<size_t>(in)] -= w.imag();
+        }
+    }
+
+    // ---- explicit dependence of the stored charge on C ------------------
+    // Q_dev = C·vcap, so dQ_dev/dC = vcap. The analysis needs it at the
+    // current point (it closes the recursion of the charge history).
+    if (ctx.kind == SensitivityContext::Kind::TRANSIENT) {
+        const double dv_real = dv.real();
+        if (ip >= 0) dqdp_re[static_cast<size_t>(ip)] += dv_real;
+        if (in >= 0) dqdp_re[static_cast<size_t>(in)] -= dv_real;
+    }
+    return true;
 }
 
 void Capacitor::storeState(const DaeSolution& x, StateStore& store) const {

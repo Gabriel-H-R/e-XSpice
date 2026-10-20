@@ -60,6 +60,10 @@ target_link_libraries(test_ac e-XSpice_lib)
 add_executable(test_noise test_noise.cpp)
 target_link_libraries(test_noise e-XSpice_lib)
 
+# 8i. Sensitivity analyses (.SENS: DC, AC, transient)
+add_executable(test_sens test_sens.cpp)
+target_link_libraries(test_sens e-XSpice_lib)
+
 # DC convergence diagnostics: current-source biased BJT (limiting walk)
 add_executable(debug_bjt_dc debug_bjt_dc.cpp)
 target_link_libraries(debug_bjt_dc e-XSpice_lib)
@@ -80,6 +84,7 @@ add_test(NAME DC_Sweep COMMAND test_dc_sweep)
 add_test(NAME Complex_LU COMMAND test_complex_lu)
 add_test(NAME AC_Analysis COMMAND test_ac)
 add_test(NAME Noise_Analysis COMMAND test_noise)
+add_test(NAME Sensitivity_Analysis COMMAND test_sens)
 
 # RL step debug
 add_executable(debug_rl debug_rl.cpp)
@@ -249,6 +254,53 @@ if(MPIEXEC_EXECUTABLE)
                      -DBINARY=$<TARGET_FILE:e-XSpice>
                      -DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/ac_freqpar_netlist.cir
                      -DEXPECT_ROWS=41
+                     -DMPIEXEC=${MPIEXEC_EXECUTABLE}
+                     -DMPI_NP_FLAG=${MPIEXEC_NUMPROC_FLAG}
+                     -DMPI_NP=2
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/check_csv.cmake)
+endif()
+
+# ================================================================
+# Sensitivity analyses (.SENS: DC, AC, transient) — end to end
+# ================================================================
+# The DC sensitivity writes one row per parameter (the exact closed form
+# of a resistive divider: -2.5e-4 and +2.5e-4).
+add_test(NAME Sens_DC_Netlist
+         COMMAND ${CMAKE_COMMAND}
+                 -DBINARY=$<TARGET_FILE:e-XSpice>
+                 -DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/sens_dc_netlist.cir
+                 -DEXPECT_ROWS=2
+                 -DEXPECT_HEADER=parameter,sensitivity
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/check_csv.cmake)
+
+# The AC sensitivity writes one row per frequency: the objective and the
+# magnitude/phase of every parameter's sensitivity.
+add_test(NAME Sens_AC_Netlist
+         COMMAND ${CMAKE_COMMAND}
+                 -DBINARY=$<TARGET_FILE:e-XSpice>
+                 -DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/sens_ac_netlist.cir
+                 -DEXPECT_ROWS=31
+                 -DEXPECT_HEADER=frequency,obj_mag,obj_phase_deg,R1:R_mag,R1:R_phase_deg,C1:C_mag,C1:C_phase_deg
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/check_csv.cmake)
+
+# The transient sensitivity writes one row per accepted time step.
+add_test(NAME Sens_TRAN_Netlist
+         COMMAND ${CMAKE_COMMAND}
+                 -DBINARY=$<TARGET_FILE:e-XSpice>
+                 -DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/sens_tran_netlist.cir
+                 -DEXPECT_HEADER=time,obj_value,R1:R,C1:C
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/check_csv.cmake)
+
+if(MPIEXEC_EXECUTABLE)
+    # The AC sensitivity sweep is deterministic (the frequencies are
+    # independent and every rank factorizes the same replicated matrix), so
+    # the distributed CSV must be byte-identical to the serial one.
+    add_test(NAME Sens_AC_Netlist_MPI
+             COMMAND ${CMAKE_COMMAND}
+                     -DBINARY=$<TARGET_FILE:e-XSpice>
+                     -DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/sens_ac_netlist.cir
+                     -DEXPECT_ROWS=31
+                     -DEXPECT_HEADER=frequency,obj_mag,obj_phase_deg,R1:R_mag,R1:R_phase_deg,C1:C_mag,C1:C_phase_deg
                      -DMPIEXEC=${MPIEXEC_EXECUTABLE}
                      -DMPI_NP_FLAG=${MPIEXEC_NUMPROC_FLAG}
                      -DMPI_NP=2

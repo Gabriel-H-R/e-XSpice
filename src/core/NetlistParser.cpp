@@ -1094,6 +1094,190 @@ bool NetlistParser::parseCommand(const std::vector<std::string>& tokens) {
             std::cout << "  Analysis: TF " << analysis_params_.tf_out_var
                       << " / " << analysis_params_.tf_input_source << std::endl;
         }
+    } else if (cmd == ".PZ") {
+        if (tokens.size() < 7) {
+            setError(".PZ requires: .PZ node1 node2 node3 node4 (vol|cur) (pol|zer|pz)");
+            return false;
+        }
+        analysis_params_.pz_out1 = tokens[1];
+        analysis_params_.pz_out2 = tokens[2];
+        analysis_params_.pz_in1 = tokens[3];
+        analysis_params_.pz_in2 = tokens[4];
+        const std::string mode = toUpper(tokens[5]);
+        if (mode == "CUR") {
+            analysis_params_.pz_current_input = true;
+        } else if (mode == "VOL") {
+            analysis_params_.pz_current_input = false;
+        } else {
+            setError(".PZ mode must be vol or cur (got '" + tokens[5] + "')");
+            return false;
+        }
+        const std::string kind = toUpper(tokens[6]);
+        if (kind == "POL") {
+            analysis_params_.pz_poles_only = true;
+            analysis_params_.pz_zeros_only = false;
+        } else if (kind == "ZER") {
+            analysis_params_.pz_poles_only = false;
+            analysis_params_.pz_zeros_only = true;
+        } else if (kind == "PZ") {
+            analysis_params_.pz_poles_only = false;
+            analysis_params_.pz_zeros_only = false;
+        } else {
+            setError(".PZ kind must be pol, zer or pz (got '" + tokens[6] + "')");
+            return false;
+        }
+        analysis_params_.type = AnalysisType::PZ;
+        analysis_params_.want_pz = true;
+        if (verbose_) {
+            std::cout << "  Analysis: PZ V(" << analysis_params_.pz_out1
+                      << "," << analysis_params_.pz_out2 << ") / "
+                      << (analysis_params_.pz_current_input ? "I(" : "V(")
+                      << analysis_params_.pz_in1 << "," << analysis_params_.pz_in2
+                      << ") " << kind << std::endl;
+        }
+    } else if (cmd == ".SENS") {
+        // .SENS V(out) [param1, param2, ...]        (ngspice style)
+        // .SENS objfunc=V(out) param=R1,R2            (Xyce style)
+        // .SENS AC V(out) R1,R2                       (AC sensitivity)
+        // .SENS TRAN V(out) R1,R2                     (transient sensitivity)
+        if (tokens.size() < 2) {
+            setError(".SENS requires an output variable");
+            return false;
+        }
+        size_t idx = 1;
+        std::string outvar;
+        // AC / transient sensitivity: .SENS AC V(out) R1,R2
+        bool ac_sens = false;
+        bool tran_sens = false;
+        std::string tok = toUpper(tokens[idx]);
+        if (tok == "AC") {
+            ac_sens = true;
+            analysis_params_.sens_ac = true;
+            ++idx;
+            tok = toUpper(tokens[idx]);
+        } else if (tok == "TRAN" || tok == "TR") {
+            tran_sens = true;
+            analysis_params_.sens_tran = true;
+            ++idx;
+            tok = toUpper(tokens[idx]);
+        }
+        // Xyce style: objfunc=... or acobjfunc=... (and the transient
+        // counterpart tranobjfunc=...).
+        //
+        // The tokenizer splits the parentheses, so `acobjfunc=V(out)` arrives
+        // as "ACOBJFUNC=V" "(" "out" ")": the parenthesized part has to be
+        // reassembled (same as the ngspice spelling below).
+        const auto reassemble = [&](size_t& i, const std::string& head) {
+            std::string spec = head;
+            if (i + 1 < tokens.size() && tokens[i + 1] == "(") {
+                size_t close = i + 2;
+                while (close < tokens.size() && tokens[close] != ")") ++close;
+                for (size_t k = i + 1; k <= close && k < tokens.size(); ++k) {
+                    spec += tokens[k];
+                }
+                i = close + 1;
+            } else {
+                ++i;
+            }
+            return spec;
+        };
+
+        bool xyce_style = false;
+        if (tok.rfind("OBJFUNC=", 0) == 0) {
+            xyce_style = true;
+            size_t i = idx;
+            outvar = reassemble(i, tokens[idx].substr(8));
+            idx = i;
+        } else if (tok.rfind("ACOBJFUNC=", 0) == 0) {
+            xyce_style = true;
+            ac_sens = true;
+            analysis_params_.sens_ac = true;
+            size_t i = idx;
+            outvar = reassemble(i, tokens[idx].substr(10));
+            idx = i;
+        } else if (tok.rfind("TRANOBJFUNC=", 0) == 0) {
+            xyce_style = true;
+            tran_sens = true;
+            analysis_params_.sens_tran = true;
+            size_t i = idx;
+            outvar = reassemble(i, tokens[idx].substr(12));
+            idx = i;
+        } else {
+            // ngspice style: first token is the output variable (V(...)/I(...)).
+            // Reassemble parenthesized form.
+            if (tokens[idx] != "V" && toUpper(tokens[idx]) != "I" &&
+                tokens[idx] != "v" && tokens[idx] != "i") {
+                // maybe it's V(...) already tokenized
+            }
+            // Handle tokenized V ( node ) form.
+            if (tokens.size() > idx + 1 && tokens[idx + 1] == "(") {
+                size_t close = idx + 2;
+                while (close < tokens.size() && tokens[close] != ")") ++close;
+                std::string spec;
+                for (size_t k = idx; k <= close; ++k) spec += tokens[k];
+                outvar = spec;
+                idx = close + 1;
+            } else {
+                outvar = tokens[idx];
+                ++idx;
+            }
+        }
+        analysis_params_.sens_output_var = outvar;
+
+        // Parameter list.
+        std::vector<std::string> param_tokens;
+        if (xyce_style) {
+            // param=...
+            while (idx < tokens.size()) {
+                std::string t = tokens[idx];
+                if (toUpper(t).rfind("PARAM=", 0) == 0) {
+                    std::string val = t.substr(6);
+                    // split on comma
+                    size_t start = 0;
+                    for (size_t i = 0; i <= val.size(); ++i) {
+                        if (i == val.size() || val[i] == ',') {
+                            if (i > start) param_tokens.push_back(val.substr(start, i - start));
+                            start = i + 1;
+                        }
+                    }
+                }
+                ++idx;
+            }
+        } else {
+            // ngspice style: remaining tokens are params (comma-separated or space).
+            while (idx < tokens.size()) {
+                std::string t = tokens[idx];
+                size_t start = 0;
+                for (size_t i = 0; i <= t.size(); ++i) {
+                    if (i == t.size() || t[i] == ',') {
+                        if (i > start) param_tokens.push_back(t.substr(start, i - start));
+                        start = i + 1;
+                    }
+                }
+                ++idx;
+            }
+        }
+
+        // Parse each param: "R1" or "R1:R"
+        for (const auto& pt : param_tokens) {
+            size_t colon = pt.find(':');
+            if (colon == std::string::npos) {
+                analysis_params_.sens_params.emplace_back(pt, "");
+            } else {
+                analysis_params_.sens_params.emplace_back(pt.substr(0, colon),
+                                                          pt.substr(colon + 1));
+            }
+        }
+
+        analysis_params_.type = AnalysisType::SENSITIVITY;
+        analysis_params_.want_sens = true;
+        if (verbose_) {
+            std::cout << "  Analysis: SENS "
+                      << (ac_sens ? "AC " : (tran_sens ? "TRAN " : ""))
+                      << analysis_params_.sens_output_var
+                      << " (" << param_tokens.size() << " param token(s))"
+                      << std::endl;
+        }
     } else if (cmd == ".MODEL") {
         return parseModel(tokens);
     } else if (cmd == ".END") {

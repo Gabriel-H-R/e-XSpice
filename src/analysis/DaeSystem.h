@@ -268,8 +268,7 @@ public:
 
     /**
      * @brief Lightweight linear-solve statistics (performance transparency).
-     */
-    struct SolveStats {
+     */    struct SolveStats {
         long long linearSolves = 0;   // total J·dx systems
         long long krylovIterations = 0;
         long long directFallbacks = 0;

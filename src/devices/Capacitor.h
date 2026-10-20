@@ -72,6 +72,16 @@ public:
     void loadJacobianQ(DaeMatrix& J, const DaeSolution& x,
                        double time) const override;
 
+    // Sensitivity (`.SENS`)
+    std::vector<std::string> sensitivityParameters() const override {
+        return {"C"};
+    }
+    bool loadSensitivity(const std::string& param_name, const DaeSolution& x,
+                         const SensitivityContext& ctx,
+                         std::vector<double>& w_re,
+                         std::vector<double>& w_im,
+                         std::vector<double>& dqdp_re) const override;
+
     void storeState(const DaeSolution& x, StateStore& store) const override;
 
     // Pulls the accepted dQ/dt (capacitor current) out of the store after

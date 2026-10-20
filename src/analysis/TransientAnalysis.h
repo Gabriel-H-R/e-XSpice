@@ -36,6 +36,39 @@
 namespace e_XSpice {
 
 class DaeSystem;   // defined in DaeSystem.h
+class DaeMatrix;
+
+/**
+ * @brief The state of an ACCEPTED time step, handed to the step observer.
+ *
+ * The sensitivity analyses need the converged solution AND the effective
+ * Jacobian of the accepted step. The transient loop is the only place where
+ * both exist, so the sensitivity engine hooks in here instead of
+ * re-implementing the time loop (breakpoints, step rejection, the LTE
+ * controller, the IC operating point...).
+ */
+struct TransientStep {
+    /** Time of the accepted point (s). */
+    double time = 0.0;
+    /** The accepted step length (s). 0 at the operating point. */
+    double dt = 0.0;
+    /** Integration coefficient (2/dt trapezoidal, 1/dt backward Euler). */
+    double s = 0.0;
+    /** True for the operating point (dt = 0, s = 0). */
+    bool is_operating_point = false;
+    /** The converged solution, in DAE space. */
+    const std::vector<double>* x = nullptr;
+    /** dF/dx at the accepted point. */
+    const DaeMatrix* G = nullptr;
+    /** dQ/dx at the accepted point. */
+    const DaeMatrix* C = nullptr;
+};
+
+/**
+ * @brief Observer called after every accepted time step.
+ * @return false to abort the simulation (the analysis reports the failure).
+ */
+using TransientStepObserver = std::function<bool(const TransientStep&)>;
 
 /**
  * @brief Transient simulation data point
@@ -93,6 +126,17 @@ public:
     void setProgressCallback(std::function<void(double time, int step, int total_steps)> callback) {
         progress_callback_ = callback;
     }
+
+    /**
+     * @brief Installs the step observer (the sensitivity analyses).
+     *
+     * The observer is called after the operating point and after every
+     * ACCEPTED step, with the converged solution and the linearization of
+     * that point. Returning false aborts the run.
+     */
+    void setStepObserver(TransientStepObserver observer) {
+        step_observer_ = std::move(observer);
+    }
     
     /**
      * @brief Defines data saving interval
@@ -117,6 +161,7 @@ private:
     int save_interval_;
     
     std::function<void(double, int, int)> progress_callback_;
+    TransientStepObserver step_observer_;
 
     std::unique_ptr<DaeSystem> system_;   // DAE/NL engine (owns the system)
 

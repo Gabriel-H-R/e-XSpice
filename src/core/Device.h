@@ -59,6 +59,7 @@
 #include "e_XSpice_rcp.h"   // RCP<T>: intrusive refcounted ownership
 #include "Node.h"
 #include "NoiseSource.h"
+#include "SensitivityContext.h"
 #include "StateIndex.h"
 // Complete type: temperatureCard() hands RCP<const DeviceModel> handles
 // around, and RCP's release path calls dec_ref() on the pointee.
@@ -329,6 +330,96 @@ public:
      */
     virtual void refreshOutputs(const DaeSolution& x, double time) const {
         (void)x; (void)time;
+    }
+
+    // ---------------------------------------------------------------
+    // SENSITIVITY (`.SENS`)
+    // ---------------------------------------------------------------
+
+    /**
+     * @brief Names of the parameters of this device that sensitivity
+     *        analysis can differentiate w.r.t. (e.g. "R" for a resistor).
+     *        Default: none (ideal C, L, etc.).
+     */
+    virtual std::vector<std::string> sensitivityParameters() const { return {}; }
+
+    /**
+     * @brief Loads the RIGHT-HAND-SIDE PERTURBATION of the small-signal
+     *        system with respect to the named parameter.
+     *
+     * The small-signal system is
+     *
+     *      A(ξ)·X = B(ξ)          ξ = 0 (DC), j·ω (AC), s (transient)
+     *
+     * and the sensitivity of an output O w.r.t. the parameter p is
+     *
+     *      dO/dp = λ^H · w         λ = A^{-H}·(∂O/∂X)
+     *      w     = ∂B/∂p − (∂A/∂p)·X
+     *
+     * where, for the transient (A = G + s·C with G = ∂F/∂x, C = ∂Q/∂x),
+     *
+     *      w     = ∂B/∂p − (∂G/∂p)·X − s·(∂C/∂p)·X
+     *
+     * THIS method returns `w` (the two output vectors hold its real and
+     * imaginary parts; the imaginary part is zero for the DC and transient
+     * flavours). The analysis engine then only has to solve ONE adjoint
+     * system and take a scalar product per parameter — the cost of the
+     * sensitivity sweep is independent of the number of parameters.
+     *
+     * Because the device's residual is linear in the unknowns, the
+     * device-level derivative IS the matrix-level one:
+     *
+     *      (∂G/∂p)·X  =  ∂F/∂p   evaluated at X
+     *      (∂C/∂p)·X  =  ∂Q/∂p   evaluated at X
+     *
+     * so a device only has to differentiate its own residual.
+     *
+     * TRANSIENT HISTORY
+     * -----------------
+     * The transient equation of a step contains the ACCEPTED HISTORY of the
+     * device's state:
+     *
+     *      rhs += s·Q_n            (and, for the trapezoidal rule, the
+     *                              derivative history as well)
+     *
+     * and that history depends on the parameter in TWO ways:
+     *
+     *      dQ_n/dp = (∂Q/∂x)·Y_n   +   ∂Q/∂p
+     *                 \________/        \______/
+     *                 the trajectory    the explicit dependence of the
+     *                 dependence        stored charge on the parameter
+     *
+     * The first (trajectory) part is the SAME for every device: it is
+     * s·(dQ/dx)·Y_n, which the ANALYSIS computes with the charge Jacobian it
+     * already has (every device owns disjoint rows of it, so the sum over the
+     * devices is one sparse product). The device therefore only has to
+     * provide the SECOND part — the explicit dependence of ITS OWN charge on
+     * the parameter — which it reports separately (`dqdp_re`), because the
+     * analysis needs it at two different points in time (the history point
+     * and the current one) to close the recursion.
+     *
+     * @param param_name parameter to differentiate w.r.t. ("R", "C", "L",
+     *                  "DC", "V", "I", ...)
+     * @param x          solution the derivative is evaluated at. For the AC
+     *                  flavour it is a PHASOR (real + imaginary parts).
+     * @param ctx        which flavour of small-signal problem this is
+     * @param w_re       real part of w (output): the INSTANTANEOUS
+     *                  perturbation of the right-hand side
+     * @param w_im       imaginary part of w (output)
+     * @param dqdp_re    the explicit parameter dependence of the device's own
+     *                  stored charge, dQ_dev/dp, at the current point (real,
+     *                  output). Zero for the DC and AC flavours.
+     * @return false when the device does not have that parameter.
+     */
+    virtual bool loadSensitivity(const std::string& param_name,
+                                 const DaeSolution& x,
+                                 const SensitivityContext& ctx,
+                                 std::vector<double>& w_re,
+                                 std::vector<double>& w_im,
+                                 std::vector<double>& dqdp_re) const {
+        (void)param_name; (void)x; (void)ctx;
+        (void)w_re; (void)w_im; (void)dqdp_re;
+        return false;
     }
 
     // ---------------------------------------------------------------

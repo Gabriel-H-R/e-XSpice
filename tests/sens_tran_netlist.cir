@@ -1,0 +1,19 @@
+* .SENS TRAN through the CLI: RC step response.
+*
+*   V1 in 0 PULSE(0 1 0 1p 1p 1 2)
+*   R1 in out 1k
+*   C1 out 0 1u
+*
+* Closed form:
+*   v_out(t) = 1 - exp(-t/RC)
+*   dv/dR   = -(t/(R^2 C))·exp(-t/RC)
+*   dv/dC   = -(t/(R C^2))·exp(-t/RC)
+*
+* The CSV carries the time, the objective and the sensitivity of every
+* parameter, at every accepted time step.
+V1 in 0 PULSE(0 1 0 1p 1p 1 2)
+R1 in out 1k
+C1 out 0 1u
+.TRAN 5u 2m
+.SENS TRAN V(out) R1,C1
+.END

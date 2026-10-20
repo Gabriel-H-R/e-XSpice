@@ -67,6 +67,16 @@ public:
     double getResistance() const { return resistance_; }
     double getConductance() const { return conductance_; }
 
+    // Sensitivity (`.SENS`)
+    std::vector<std::string> sensitivityParameters() const override {
+        return {"R"};
+    }
+    bool loadSensitivity(const std::string& param_name, const DaeSolution& x,
+                         const SensitivityContext& ctx,
+                         std::vector<double>& w_re,
+                         std::vector<double>& w_im,
+                         std::vector<double>& dqdp_re) const override;
+
     // ---- circuit temperature (`.TEMP`) ----
     RCP<const DeviceModel> temperatureCard() const override {
         return RCP<const DeviceModel>(model_);

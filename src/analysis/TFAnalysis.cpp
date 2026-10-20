@@ -131,7 +131,6 @@ TFResult TFAnalysis::run() {
     // Returns the frequency-system rows involved (pos, neg) and a kind tag:
     // 'V' node voltage, 'I' branch current of a device with a branch unknown.
     int out_pos = -1, out_neg = -1;
-    bool out_is_current = false;
     if (kind == 'V') {
         const auto& node_map = lin.system().nodeMap();
         auto rowOfName = [&](const std::string& name, bool& found) -> int {
@@ -184,7 +183,9 @@ TFResult TFAnalysis::run() {
                 d->getNodes()[0]->getId())]);
             out_neg = lin.acRow(lin.system().nodeMap()[static_cast<size_t>(
                 d->getNodes()[1]->getId())]);
-            out_is_current = true;   // handled specially below
+            // A resistor's current is g·(V(pos) − V(neg)): the output is the
+            // difference of two node voltages, handled by the same code path
+            // as the differential node output.
         } else {
             result.success = false;
             result.message = "I(" + dev + ") is not a supported output "

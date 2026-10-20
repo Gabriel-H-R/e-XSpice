@@ -7,6 +7,7 @@
 #include "Inductor.h"
 #include "../core/DaeSolution.h"
 #include "../solver/DaeMatrix.h"
+#include <complex>
 #include <stdexcept>
 
 namespace e_XSpice {
@@ -134,6 +135,51 @@ void Inductor::storeState(const DaeSolution& x, StateStore& store) const {
     const double f0  = inductance_ * iL;
     flux_cache_ = f0;
     store.setDeviceQ(state_index_, &f0, 1);
+}
+
+// ---------------------------------------------------------------
+// Sensitivity (`.SENS`): the right-hand-side perturbation w.
+//
+// The inductor is a pure FLUX device: the branch equation (v+ - v-) lives
+// in F (and does not depend on L), while the flux is
+//
+//   Q[branch] += L·i_L
+//
+// so dQ/dL = i_L at the branch row and the effective system A = G + ξ·C
+// carries the inductance only through ξ:
+//
+//   w[branch] = -ξ·i_L
+//
+// with ξ = j·ω (AC) or 2/dt, 1/dt (transient) and 0 (DC, where an inductor
+// is a short and has no effect).
+// ---------------------------------------------------------------
+bool Inductor::loadSensitivity(const std::string& param_name,
+                               const DaeSolution& x,
+                               const SensitivityContext& ctx,
+                               std::vector<double>& w_re,
+                               std::vector<double>& w_im,
+                               std::vector<double>& dqdp_re) const {
+    if (param_name != "L" && param_name != "l") return false;
+    if (isICOperatingPoint() && ic_given_) return false;
+
+    const std::complex<double> xi = ctx.coeff();
+    if (xi == std::complex<double>(0.0, 0.0)) return false;
+
+    const int ib = branch_index_;
+    if (ib < 0 || ib >= static_cast<int>(w_re.size())) return false;
+
+    // Instantaneous part: w[branch] = -ξ·i_L
+    const std::complex<double> iL = x.valueAt(ib);
+    const std::complex<double> w = -xi * iL;
+    w_re[static_cast<size_t>(ib)] += w.real();
+    w_im[static_cast<size_t>(ib)] += w.imag();
+
+    // Explicit dependence of the stored FLUX on L: the flux is L·i_L, so
+    // dQ_dev/dL = i_L. The analysis needs it at the current point.
+    if (ctx.kind == SensitivityContext::Kind::TRANSIENT) {
+        dqdp_re[static_cast<size_t>(ib)] += iL.real();
+    }
+    return true;
 }
 
 void Inductor::loadChargeHistory(const StateStore& store, double q_coeff,

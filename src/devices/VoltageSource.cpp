@@ -118,4 +118,47 @@ double VoltageSource::getPower() const {
     return -getVoltage() * last_current_;
 }
 
+// ---------------------------------------------------------------
+// Sensitivity (`.SENS`): d(F-B)/dV = -1 at the branch row.
+//   F[bra] += (v+ - v-)   (no V dependence)
+//   B[bra] += V           (RHS)
+//   d(F-B)/dV = -1 at bra.
+// ---------------------------------------------------------------
+// Sensitivity (`.SENS`): the right-hand-side perturbation w.
+//
+// The source's value enters the system ONLY through B[branch] (the
+// constitutive relation v+ - v- = V(t) lives in F, whose derivative with
+// respect to the source value is zero), so
+//
+//   w[branch] = dB/dV = 1          (DC / transient)
+//   w[branch] = e^{j*phase}        (AC: the parameter is the AC magnitude,
+//                                   d(mag·e^{jφ})/d(mag) = e^{jφ})
+// ---------------------------------------------------------------
+bool VoltageSource::loadSensitivity(const std::string& param_name,
+                                    const DaeSolution& x,
+                                    const SensitivityContext& ctx,
+                                    std::vector<double>& w_re,
+                                    std::vector<double>& w_im,
+                                    std::vector<double>& dqdp_re) const {
+    (void)x; (void)dqdp_re;   // a source has no state
+    if (param_name != "DC" && param_name != "V" && param_name != "dc" &&
+        param_name != "v") {
+        return false;
+    }
+    const int ib = branch_index_;
+    if (ib < 0 || ib >= static_cast<int>(w_re.size())) return false;
+
+    double dre = 1.0;
+    double dim = 0.0;
+    if (ctx.kind == SensitivityContext::Kind::AC) {
+        if (!waveform_.hasAC()) return false;   // silent source: no AC gain
+        const double phi = waveform_.acPhaseRad();
+        dre = std::cos(phi);
+        dim = std::sin(phi);
+    }
+    w_re[static_cast<size_t>(ib)] += dre;
+    w_im[static_cast<size_t>(ib)] += dim;
+    return true;
+}
+
 } // namespace e_XSpice

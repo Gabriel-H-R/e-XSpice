@@ -374,11 +374,17 @@ NoiseResult NoiseAnalysis::run(bool use_mpi) {
     }
 
     // ---- adjoint right-hand side (fixed: e_out) ---------------------------
-    // Assembled once, in DAE space, then mapped through the row permutation.
+    // Assembled once, in DAE space. The TRANSPOSED solve takes its
+    // right-hand side in the ORIGINAL row indexing: the transpose undoes
+    // the pivot-safe row permutation, and the solution comes back in the
+    // permuted indexing (which is how it is read below, through acRow()).
+    // Permuting the right-hand side here would silently compute
+    // A^{-T}·P·c instead of A^{-T}·c — identical whenever the ordering is
+    // the identity, wrong for every circuit that needs a row swap.
     std::vector<double> rhs_full(static_cast<size_t>(n_full), 0.0);
     if (out_dae >= 0) rhs_full[static_cast<size_t>(out_dae)] += 1.0;
     if (ref_dae >= 0) rhs_full[static_cast<size_t>(ref_dae)] -= 1.0;
-    const std::vector<double> rhs = lin.permuteRhs(rhs_full);
+    const std::vector<double> rhs = lin.dropGroundRow(rhs_full);
     std::vector<double> zero_im(static_cast<size_t>(nn), 0.0);
     const int out_ac_row = lin.acRow(out_dae);
     const int ref_ac_row = lin.acRow(ref_dae);

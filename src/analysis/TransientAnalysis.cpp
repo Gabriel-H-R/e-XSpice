@@ -179,6 +179,26 @@ TransientResult TransientAnalysis::run(double tstart, double tstop, double tstep
     }
     system_->setICOperatingPoint(false);
 
+    // ---- operating point handed to the step observer ----------------------
+    // The sensitivity analyses want the DC linearization of the operating
+    // point; it is produced here (the transient loop is the only place
+    // where the converged solution and its Jacobian coexist).
+    if (step_observer_) {
+        system_->refreshLinearization(/*include_gmin=*/false);
+        TransientStep info;
+        info.time = tstart;
+        info.dt = 0.0;
+        info.s = 0.0;
+        info.is_operating_point = true;
+        info.x = &system_->solution();
+        info.G = &system_->jacobianF();
+        info.C = &system_->jacobianQ();
+        if (!step_observer_(info)) {
+            result.message = "the step observer aborted the transient analysis";
+            return result;
+        }
+    }
+
     // ================= TIME LOOP =================
     auto t0 = std::chrono::high_resolution_clock::now();
 
@@ -269,6 +289,27 @@ TransientResult TransientAnalysis::run(double tstart, double tstop, double tstep
             x_prev_prev = x_prev;
         }
         x_prev = system_->solution();
+
+        // ---- hand the accepted step to the observer -----------------------
+        // The observer runs BEFORE the history rotation: the store still
+        // holds Q(t_n), the history the step equation just used.
+        if (step_observer_) {
+            // Re-assemble the Jacobians at the CONVERGED point (the Newton
+            // loop leaves the ones of the previous iterate in memory).
+            system_->refreshLinearization(/*include_gmin=*/false);
+            TransientStep info;
+            info.time = t;
+            info.dt = dt;
+            info.s = integrationCoeff(dt);
+            info.is_operating_point = false;
+            info.x = &system_->solution();
+            info.G = &system_->jacobianF();
+            info.C = &system_->jacobianQ();
+            if (!step_observer_(info)) {
+                result.message = "the step observer aborted the transient analysis";
+                return result;
+            }
+        }
 
         // Advance the charge/flux history with the integrator formula.
         system_->acceptTimeStep(integrationCoeff(dt),

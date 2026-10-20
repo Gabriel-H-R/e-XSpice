@@ -58,7 +58,9 @@ enum class AnalysisType {
     AC,           // .AC
     DC_SWEEP,     // .DC
     NOISE,        // .NOISE
-    TF            // .TF
+    TF,           // .TF
+    PZ,           // .PZ
+    SENSITIVITY   // .SENS
 };
 
 /**
@@ -76,10 +78,24 @@ struct AnalysisParameters {
     bool want_ac = false;       // .AC seen
     bool want_noise = false;    // .NOISE seen
     bool want_tf = false;       // .TF seen
+    bool want_pz = false;       // .PZ seen
+    bool want_sens = false;     // .SENS seen
+    bool sens_ac = false;       // AC sensitivity (.SENS AC ...)
+    bool sens_tran = false;     // transient sensitivity (.SENS TRAN ...)
 
     // Transfer function (.TF): OUTVAR INVAR (both tokens reassembled).
     std::string tf_out_var;
     std::string tf_input_source;
+
+    // Pole-zero (.PZ): node1 node2 node3 node4 (vol|cur) (pol|zer|pz)
+    std::string pz_out1, pz_out2, pz_in1, pz_in2;
+    bool pz_current_input = false;
+    bool pz_poles_only = false;
+    bool pz_zeros_only = false;
+
+    // Sensitivity (.SENS): output variable + parameter list.
+    std::string sens_output_var;
+    std::vector<std::pair<std::string, std::string>> sens_params;  // (device, param)
 
     // Transient analysis
     double tran_tstep = 0.0;    // Time step

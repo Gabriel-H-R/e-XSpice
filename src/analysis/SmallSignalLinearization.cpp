@@ -16,10 +16,6 @@
 
 namespace e_XSpice {
 
-namespace {
-constexpr double kPi2 = 6.28318530717958647692;   // 2*pi
-} // namespace
-
 bool SmallSignalLinearization::prepare(Circuit& circuit, const Options& opt) {
     ok_ = false;
     circuit_ = &circuit;
@@ -138,8 +134,9 @@ bool SmallSignalLinearization::prepare(Circuit& circuit, const Options& opt) {
         }
         // Any positive reference frequency works; the ordering decision only
         // looks at WHICH entries exist and how big they are relative to each
-        // other, which does not change with w in a circuit matrix.
-        constexpr double kOmegaRef = kPi2;   // 1 Hz
+        // other, which does not change with w in a circuit matrix. A DC
+        // analysis passes 0, because its matrix is G alone.
+        const double kOmegaRef = opt.reference_omega;
         std::vector<double> ref_re(col_idx_.size());
         std::vector<double> ref_im(col_idx_.size());
         for (size_t p = 0; p < col_idx_.size(); ++p) {
@@ -204,6 +201,38 @@ std::vector<double> SmallSignalLinearization::permuteRhs(
                 : 0.0;
     }
     return out;
+}
+
+std::vector<double> SmallSignalLinearization::dropGroundRow(
+    const std::vector<double>& full) const {
+    // Keeps the ORIGINAL row order (only the ground row is removed): this
+    // is the indexing a TRANSPOSED solve expects for its right-hand side.
+    std::vector<double> out(static_cast<size_t>(nn_), 0.0);
+    int k = 0;
+    for (int r = 0; r < n_full_; ++r) {
+        if (r == gnd_row_) continue;
+        out[static_cast<size_t>(k++)] =
+            (r < static_cast<int>(full.size())) ? full[static_cast<size_t>(r)] : 0.0;
+    }
+    return out;
+}
+
+std::vector<double> SmallSignalLinearization::unpermuteSolution(
+    const std::vector<double>& perm) const {
+    std::vector<double> out(static_cast<size_t>(n_full_), 0.0);
+    unpermuteSolution(perm, out);
+    return out;
+}
+
+void SmallSignalLinearization::unpermuteSolution(
+    const std::vector<double>& perm, std::vector<double>& out) const {
+    out.assign(static_cast<size_t>(n_full_), 0.0);
+    for (int k = 0; k < nn_; ++k) {
+        const int r = row_of_ac_[static_cast<size_t>(k)];
+        if (r < 0) continue;
+        out[static_cast<size_t>(r)] =
+            (k < static_cast<int>(perm.size())) ? perm[static_cast<size_t>(k)] : 0.0;
+    }
 }
 
 } // namespace e_XSpice

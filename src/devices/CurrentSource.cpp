@@ -76,4 +76,51 @@ double CurrentSource::getPower() const {
     return -waveform_.value(last_time_) * (vp - vn);
 }
 
+// ---------------------------------------------------------------
+// Sensitivity (`.SENS`): d(F-B)/dI = +1 at pos, -1 at neg.
+// ---------------------------------------------------------------
+// Sensitivity (`.SENS`): the right-hand-side perturbation w.
+//
+// The current source has NO static residual (F is empty) and enters the
+// system only through B:
+//
+//   B[pos] -= I,  B[neg] += I
+//
+// so w = dB/dI is -1 at pos and +1 at neg (DC / transient). In the AC
+// flavour the parameter is the AC magnitude: B_ac carries -I_ac at pos,
+// hence dB_ac/d(mag) = -e^{jφ} at pos.
+// ---------------------------------------------------------------
+bool CurrentSource::loadSensitivity(const std::string& param_name,
+                                    const DaeSolution& x,
+                                    const SensitivityContext& ctx,
+                                    std::vector<double>& w_re,
+                                    std::vector<double>& w_im,
+                                    std::vector<double>& dqdp_re) const {
+    (void)x; (void)dqdp_re;   // a source has no state
+    if (param_name != "DC" && param_name != "I" && param_name != "dc" &&
+        param_name != "i") {
+        return false;
+    }
+    const int ip = rowOf(nodes_[0]);
+    const int in = rowOf(nodes_[1]);
+
+    double dre = -1.0;
+    double dim = 0.0;
+    if (ctx.kind == SensitivityContext::Kind::AC) {
+        if (!waveform_.hasAC()) return false;   // silent source: no AC gain
+        const double phi = waveform_.acPhaseRad();
+        dre = -std::cos(phi);
+        dim = -std::sin(phi);
+    }
+    if (ip >= 0) {
+        w_re[static_cast<size_t>(ip)] += dre;
+        w_im[static_cast<size_t>(ip)] += dim;
+    }
+    if (in >= 0) {
+        w_re[static_cast<size_t>(in)] -= dre;
+        w_im[static_cast<size_t>(in)] -= dim;
+    }
+    return true;
+}
+
 } // namespace e_XSpice

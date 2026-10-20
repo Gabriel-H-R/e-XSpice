@@ -60,6 +60,17 @@ public:
         bool   verbose        = false;
         /** Solves the OP on the distributed device/row layout (MPI). */
         bool   use_distributed_layout = true;
+        /**
+         * @brief Frequency used to DECIDE the pivot-safe ordering (rad/s).
+         *
+         * The ordering only asks "does this column have a usable pivot?",
+         * and the answer must not change over the sweep. For a frequency
+         * sweep, any positive reference works; for the DC sensitivity the
+         * matrix is G alone, so the reference must be 0 — otherwise an
+         * inductor's branch column would look pivotable (j·ω·L on its
+         * diagonal) when the DC matrix has no diagonal there at all.
+         */
+        double reference_omega = 6.28318530717958647692;   // 2*pi (1 Hz)
     };
 
     /**
@@ -106,8 +117,43 @@ public:
      * Used for right-hand sides, which live on the EQUATIONS (rows) and
      * therefore follow the permutation. Row k of the result is the component
      * of full row row_of_ac[perm.row_of_pos[k]].
+     *
+     * This is the correct transformation for a FORWARD solve (A'·x = b',
+     * with A' = P·A): the right-hand side follows the rows.
      */
     std::vector<double> permuteRhs(const std::vector<double>& full) const;
+
+    /**
+     * @brief Drops the ground row (if any) KEEPING THE ORIGINAL ROW ORDER.
+     *
+     * This is the correct transformation for a TRANSPOSED solve
+     * (A'^T·x = b): the transpose "undoes" the row permutation, so the
+     * right-hand side must stay in the original indexing, and the SOLUTION
+     * comes back in the permuted indexing (read it at acRow()).
+     *
+     * Getting this wrong is silent: the adjoint vector is then A^{-T}·P·c
+     * instead of A^{-T}·c, which is right whenever the pivot-safe ordering
+     * happens to be the identity and wrong for every circuit that needs a
+     * row swap (a node wired only to sources/inductors, for instance).
+     */
+    std::vector<double> dropGroundRow(const std::vector<double>& full) const;
+
+    /**
+     * @brief Maps a permuted frequency-system vector back to DAE space.
+     *
+     * The inverse of permuteRhs(): the solution of the frequency system
+     * lives in the permuted indexing, but the devices read their node
+     * voltages in the DAE indexing, so the AC solution has to be mapped
+     * back before it is handed to a device.
+     */
+    std::vector<double> unpermuteSolution(const std::vector<double>& perm) const;
+
+    /**
+     * @brief Maps a permuted frequency-system vector back to DAE space,
+     *        writing into a caller-provided buffer (no allocation).
+     */
+    void unpermuteSolution(const std::vector<double>& perm,
+                            std::vector<double>& out) const;
 
     /** Newton iterations spent on the operating point. */
     int newtonIterations() const { return newton_iterations_; }

@@ -80,6 +80,16 @@ public:
     double getCurrent() const override { return last_current_; }  // + → − through source
     double getPower()   const override;                            // delivered (V·i)
 
+    // Sensitivity (`.SENS`)
+    std::vector<std::string> sensitivityParameters() const override {
+        return {"DC", "V"};
+    }
+    bool loadSensitivity(const std::string& param_name, const DaeSolution& x,
+                         const SensitivityContext& ctx,
+                         std::vector<double>& w_re,
+                         std::vector<double>& w_im,
+                         std::vector<double>& dqdp_re) const override;
+
     // Getters / setters
     double getVoltage() const { return waveform_.value(last_time_); }
     const SourceWaveform& waveform() const { return waveform_; }

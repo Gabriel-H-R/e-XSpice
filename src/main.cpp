@@ -19,6 +19,10 @@
 #include "analysis/DCSweep.h"
 #include "analysis/NoiseAnalysis.h"
 #include "analysis/TFAnalysis.h"
+#include "analysis/PZAnalysis.h"
+#include "analysis/ACSensitivityAnalysis.h"
+#include "analysis/SensitivityAnalysis.h"
+#include "analysis/TransientSensitivityAnalysis.h"
 #include "analysis/TransientAnalysis.h"
 #include "parallel/MPIManager.h"
 
@@ -151,9 +155,16 @@ bool simulateNetlist(const std::string& filename, bool use_mpi,
     const bool do_op = params.want_op || params.type == AnalysisType::DC_OP;
     const bool do_tran = params.want_tran || params.type == AnalysisType::TRANSIENT;
     const bool do_dc = params.want_dc_sweep || params.type == AnalysisType::DC_SWEEP;
-    const bool do_ac = params.want_ac || params.type == AnalysisType::AC;
+    const bool do_ac_standalone = (params.want_ac || params.type == AnalysisType::AC) &&
+                              !(params.want_sens && params.sens_ac);
+    const bool do_ac_sensitivity = params.want_sens && params.sens_ac;
+    const bool do_tran_sensitivity = params.want_sens && params.sens_tran;
     const bool do_noise = params.want_noise || params.type == AnalysisType::NOISE;
     const bool do_tf = params.want_tf || params.type == AnalysisType::TF;
+    const bool do_pz = params.want_pz || params.type == AnalysisType::PZ;
+    const bool do_sens = params.want_sens || params.type == AnalysisType::SENSITIVITY;
+    const bool do_dc_sensitivity =
+        do_sens && !params.sens_ac && !params.sens_tran;
 
     if (do_op) {
         DCAnalysis dc(circuit);
@@ -237,7 +248,8 @@ bool simulateNetlist(const std::string& filename, bool use_mpi,
                 }
             }
         }
-    } else if (!do_op && !do_dc && !do_ac && !do_noise && !do_tf) {
+    } else if (!do_op && !do_dc && !do_ac_standalone && !do_ac_sensitivity && !do_noise &&
+           !do_tf && !do_pz && !do_sens) {
         if (mpi.isMaster()) std::cerr << "No analysis specified in netlist (use .OP, .TRAN, .DC, .AC or .NOISE)" << std::endl;
         return false;
     }
@@ -346,7 +358,7 @@ bool simulateNetlist(const std::string& filename, bool use_mpi,
         }
     }
 
-    if (do_ac) {
+    if (do_ac_standalone) {
         // Small-signal sweep: ONE operating point + one linearization, then an
         // independent complex solve per frequency (frequencies can be solved
         // in parallel because they do not depend on each other).
@@ -616,6 +628,164 @@ bool simulateNetlist(const std::string& filename, bool use_mpi,
                           << " ohm" << std::endl;
                 std::cout << "  output resistance = " << result.output_resistance
                           << " ohm" << std::endl;
+            }
+        }
+    }
+
+    if (do_pz) {
+        PZAnalysis pz(circuit);
+        pz.setOutputNodes(params.pz_out1, params.pz_out2);
+        pz.setInputNodes(params.pz_in1, params.pz_in2);
+        pz.setCurrentInput(params.pz_current_input);
+        pz.setPolesOnly(params.pz_poles_only);
+        pz.setZerosOnly(params.pz_zeros_only);
+        pz.setVerbose(mpi.isMaster());
+        if (params.opt_max_iterations > 0) pz.setMaxIterations(params.opt_max_iterations);
+        PZResult result = pz.run();
+        if (mpi.isMaster()) {
+            if (!result.success) {
+                std::cerr << "PZ analysis failed: " << result.message << std::endl;
+            } else {
+                std::cout << "\nPole-zero analysis completed: " << result.message
+                          << std::endl;
+                std::cout << "  DC gain = " << result.dc_gain << std::endl;
+                std::cout << "  Poles (" << result.poles.size() << "):" << std::endl;
+                for (const auto& p : result.poles) {
+                    std::cout << "    " << p.real << " + " << p.imag << "i" << std::endl;
+                }
+                std::cout << "  Zeros (" << result.zeros.size() << "):" << std::endl;
+                for (const auto& z : result.zeros) {
+                    std::cout << "    " << z.real << " + " << z.imag << "i" << std::endl;
+                }
+            }
+        }
+    }
+
+    if (do_ac_sensitivity) {
+        auto variationOf = [](const std::string& v) {
+            return (v == "DEC") ? ACVariation::DEC
+                 : (v == "OCT") ? ACVariation::OCT
+                                : ACVariation::LIN;
+        };
+        ACSensitivityAnalysis acsens(circuit);
+        acsens.setVariation(variationOf(params.ac_variation));
+        acsens.setPoints(params.ac_points);
+        acsens.setFrequencyRange(params.ac_fstart, params.ac_fstop);
+        acsens.setOutputVar(params.sens_output_var);
+        for (const auto& [dev, param] : params.sens_params) {
+            acsens.addParameter(dev, param);
+        }
+        acsens.setVerbose(mpi.isMaster());
+        acsens.setMaxRetainedPoints(kACMaxRetainedPoints);
+
+        // CSV export (the same stream the other analyses use).
+        std::ofstream csv;
+        if (mpi.isMaster() && !csv_path.empty()) {
+            csv.open(csv_path);
+            if (csv.is_open()) {
+                csv.precision(17);
+                acsens.setCsvStream(&csv);
+            } else {
+                std::cerr << "Erro ao criar o arquivo " << csv_path << "\n";
+            }
+        }
+
+        ACSensitivityResult result = acsens.run(use_mpi);
+        if (mpi.isMaster()) {
+            if (csv.is_open()) csv.close();
+            if (!result.success) {
+                std::cerr << "AC sensitivity failed: " << result.message << std::endl;
+            } else {
+                std::cout << "\nAC sensitivity completed: " << result.message << std::endl;
+                std::cout << "  " << result.points.size() << " frequencies" << std::endl;
+                if (!result.points.empty()) {
+                    const auto& pt = result.points.front();
+                    std::cout << "  f=" << pt.frequency << " Hz: |O|=" << pt.obj_mag
+                              << " (" << pt.obj_phase_deg << " deg)" << std::endl;
+                    for (size_t i = 0; i < result.param_names.size(); ++i) {
+                        std::cout << "    |dO/d(" << result.param_names[i] << ")| = "
+                                  << pt.sens_mag[i] << " ("
+                                  << pt.sens_phase_deg[i] << " deg)" << std::endl;
+                    }
+                }
+            }
+        }
+    } else if (do_tran_sensitivity) {
+        TransientSensitivityAnalysis tsens(circuit);
+        tsens.setVariation(params.tran_tstart, params.tran_tstop, params.tran_tstep);
+        tsens.setOutputVar(params.sens_output_var);
+        for (const auto& [dev, param] : params.sens_params) {
+            tsens.addParameter(dev, param);
+        }
+        tsens.setVerbose(mpi.isMaster());
+
+        std::ofstream csv;
+        if (mpi.isMaster() && !csv_path.empty()) {
+            csv.open(csv_path);
+            if (csv.is_open()) {
+                csv.precision(17);
+                tsens.setCsvStream(&csv);
+            } else {
+                std::cerr << "Erro ao criar o arquivo " << csv_path << "\n";
+            }
+        }
+
+        TransientSensitivityResult result = tsens.run(use_mpi);
+        if (mpi.isMaster()) {
+            if (csv.is_open()) csv.close();
+            if (!result.success) {
+                std::cerr << "Transient sensitivity failed: " << result.message
+                          << std::endl;
+            } else {
+                std::cout << "\nTransient sensitivity completed: " << result.message
+                          << std::endl;
+                if (!result.points.empty()) {
+                    const auto& pt = result.points.back();
+                    std::cout << "  last point t=" << pt.time << " s: O="
+                              << pt.obj_value << std::endl;
+                    for (size_t i = 0; i < result.param_names.size(); ++i) {
+                        std::cout << "    d(" << result.output_var << ")/d("
+                                  << result.param_names[i] << ") = "
+                                  << pt.sens[i] << std::endl;
+                    }
+                }
+            }
+        }
+    } else if (do_dc_sensitivity) {
+        SensitivityAnalysis sens(circuit);
+        sens.setOutputVar(params.sens_output_var);
+        for (const auto& [dev, param] : params.sens_params) {
+            sens.addParameter(dev, param);
+        }
+        sens.setVerbose(mpi.isMaster());
+
+        std::ofstream csv;
+        if (mpi.isMaster() && !csv_path.empty()) {
+            csv.open(csv_path);
+            if (csv.is_open()) {
+                csv.precision(17);
+                sens.setCsvStream(&csv);
+            } else {
+                std::cerr << "Erro ao criar o arquivo " << csv_path << "\n";
+            }
+        }
+
+        SensitivityResult result = sens.run();
+        if (mpi.isMaster()) {
+            if (csv.is_open()) csv.close();
+            if (!result.success) {
+                std::cerr << "Sensitivity analysis failed: " << result.message
+                          << std::endl;
+            } else {
+                std::cout << "\nSensitivity analysis completed: "
+                          << result.message << std::endl;
+                std::cout << "\nSensitivities of " << result.output_var
+                          << ":" << std::endl;
+                for (size_t i = 0; i < result.param_names.size(); ++i) {
+                    std::cout << "  d(" << result.output_var << ")/d("
+                              << result.param_names[i] << ") = "
+                              << result.sensitivities[i] << std::endl;
+                }
             }
         }
     }

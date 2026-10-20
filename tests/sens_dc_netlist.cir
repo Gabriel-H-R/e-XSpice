@@ -1,0 +1,18 @@
+* .SENS DC through the CLI: resistive divider.
+*
+*   V1 in 0 DC 1
+*   R1 in out 1k
+*   R2 out 0 1k
+*
+* Closed form:
+*   V(out) = V1*R2/(R1+R2) = 0.5 V
+*   d(V(out))/dR1 = -V1*R2/(R1+R2)^2 = -2.5e-4
+*   d(V(out))/dR2 = +V1*R1/(R1+R2)^2 = +2.5e-4
+*
+* The DC sensitivity has no CSV of its own: it prints one line per
+* parameter (the log is checked by the test's PASS_REGULAR_EXPRESSION).
+V1 in 0 DC 1
+R1 in out 1k
+R2 out 0 1k
+.SENS V(out) R1,R2
+.END

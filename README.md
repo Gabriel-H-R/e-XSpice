@@ -130,6 +130,64 @@ This project explores the intersection of numerical analysis, sparse matrix comp
       serial → 1.59 s with 4 OpenMP threads (1.8×) → 1.73 s with 2 ranks →
       1.30 s with 4 ranks (2.2×), with the CSV **byte-identical** across all
       four (ctest checks it).
+  - **Sensitivity (`.SENS`)** — `dO/dp` of an output expression with respect to
+    circuit parameters, in the three flavours of the small-signal problem
+    (`src/analysis/SensitivityAnalysis.{h,cpp}`,
+    `src/analysis/ACSensitivityAnalysis.{h,cpp}`,
+    `src/analysis/TransientSensitivityAnalysis.{h,cpp}`):
+    ```
+    .SENS        V(out) [R1,R2,...]              (DC)
+    .SENS AC     V(out) [R1,R2,...]              (small signal)
+    .SENS TRAN   V(out) [R1,R2,...]              (time domain)
+    .SENS objfunc=V(out) param=R1,R2            (Xyce spelling)
+    .SENS acobjfunc=V(out) param=R1,R2          (Xyce, AC)
+    .SENS tranobjfunc=V(out) param=R1,R2        (Xyce, transient)
+    ```
+    - **one formulation for the three flavours.** The sensitivity is always the
+      right-hand-side perturbation of the small-signal system,
+      ```
+      w = ∂B/∂p − (∂G/∂p)·X − s·(∂C/∂p)·X
+      dO/dp = λᴴ·w          (λ = A⁻ᴴ·∂O/∂X)
+      ```
+      and `w` is produced by the device layer (`Device::loadSensitivity`), so
+      the analysis engines are device-agnostic and a new device becomes
+      differentiable by implementing that one hook. Because the device residual
+      is linear in the unknowns, the device-level derivative IS the
+      matrix-level one (`(∂G/∂p)·X = ∂F/∂p` evaluated at `X`).
+    - **DC and AC use the adjoint** (`Aᵀ·λ = ∂O/∂X`, one solve per objective),
+      so the cost of the sweep is independent of the number of parameters — the
+      reason this engine never pays the direct method's `O(n_params·solve)`.
+      Xyce offers both (`direct=1/0`); the scalable one is always used here.
+      The AC sweep runs the frequencies concurrently over OpenMP (each thread
+      owns its own LU and buffers, and the result does not depend on the
+      grouping: the CSV is byte-identical for 1 and 4 threads).
+    - **the transient uses the direct method with the recursion of the
+      trajectory** (`Y_{n+1} = J⁻¹·(w + s·(dQ/dx)·Y_n)`), because the
+      sensitivity of a time SERIES is the derivative of a recursion: the
+      adjoint of a recursion is a backward sweep, which cannot produce the
+      sensitivity of every time point of a forward simulation. One
+      factorization per step is shared by all the parameters, and the
+      perturbation is carried forward through the charge history (the term
+      that makes the sensitivity of a capacitor charge depend on the whole
+      trajectory, not only on the current step). The trapezoidal rule's
+      secondary history (the stored `dQ/dt`) is differentiated too, so the
+      result is the exact derivative of the integrated scheme.
+    - **the trajectory is the one a plain `.TRAN` produces**: the sensitivity
+      hooks into the transient engine's step observer, so the breakpoints, the
+      step rejection and the LTE controller are shared (no re-implementation
+      of the time loop).
+    - covered parameters: `R` (resistor), `C` (capacitor), `L` (inductor),
+      `DC`/`V` (voltage source), `DC`/`I` (current source). In the AC flavour
+      the source parameter is the AC magnitude. Nonlinear devices (diode, BJT,
+      MOSFET) are not differentiable yet: their residual is not linear in the
+      unknowns, so the device-level derivative is not the matrix-level one.
+    - verified against closed forms: `d(V(out))/dR1 = −V1·R2/(R1+R2)²` and
+      `d(V(out))/dR2 = +V1·R1/(R1+R2)²` (DC divider), `dH/dR = −sC/(1+sRC)²`
+      and `dH/dC = −sR/(1+sRC)²` (AC low-pass), and
+      `dv/dR = −(t/R²C)·e^(−t/RC)`, `dv/dC = −(t/RC²)·e^(−t/RC)` (transient
+      step). `tests/test_sens.cpp` checks them, plus the adjoint against a
+      dense pivoted reference on a circuit whose pivot-safe ordering is not
+      the identity.
 - **Circuit temperature (`.TEMP <celsius>`, also `.OPTIONS TEMP=`):** re-scales
   every model card that did not pin its own `TEMP=` (SPICE precedence:
   instance > card > circuit) and refreshes the devices that precompute
@@ -467,6 +525,11 @@ You can run a custom SPICE netlist by passing the `file` argument:
 
 # Small-signal frequency response of an RC low-pass (AC analysis)
 ./build/e-XSpice file ./tests/ac_rc_netlist.cir out.csv
+
+# Sensitivity of an output to circuit parameters (DC, AC or transient)
+./build/e-XSpice file ./tests/sens_dc_netlist.cir sens.csv
+./build/e-XSpice file ./tests/sens_ac_netlist.cir sens.csv
+./build/e-XSpice file ./tests/sens_tran_netlist.cir sens.csv
 ```
 
 An AC netlist only needs the excitation and the sweep:
@@ -633,6 +696,13 @@ mpiexec -n 4 ./build/e-XSpice file examples/clipper_2000.cir   # + OMP_NUM_THREA
 
 # Force distribution on/off regardless of thresholds (tests, debugging):
 EXSPICE_DISTRIBUTE=1  # force on     EXSPICE_DISTRIBUTE=0  # force serial
+
+# Per-analysis traces (stderr):
+EXSPICE_DEBUG_AC=1      # AC sweep internals
+EXSPICE_DEBUG_NOISE=1   # noise sweep internals
+EXSPICE_DEBUG_TF=1      # transfer-function internals
+EXSPICE_DEBUG_LU=1      # sparse LU pivots
+EXSPICE_DEBUG_SENS=1    # transient sensitivity, one line per accepted step
 ```
 
 Rule of thumb: MPI distribution pays off for device-heavy circuits (costly
@@ -682,13 +752,36 @@ which the CTest suite checks (`AC_Netlist_MPI`, `AC_Netlist_FreqPar`).
         output resistance from a single linearization at the operating point
         (two solves on the shared complex LU, the input driven with a unit
         phasor); `V(node)`, `V(n1,n2)` and `I(dev)` output variables
+  - [x] **Pole-zero (`.PZ`)** - poles and zeros of the small-signal transfer
+        function via a grid search + bisection on `det(G + sC)` (and the
+        augmented system for `vol` mode), with the DC gain; real poles and
+        zeros are found, complex ones (underdamped systems) and zeros at
+        `s = 0` are not yet covered
   - [ ] Noise extras: flicker noise in the level-1 MOS card (`KF`/`AF`/`NF`) and
         the BSIM4 unified flicker model (`EF`), correlated BJT noise (`T0/T2/T3`),
         `DATA=` table sweeps
+  - [x] **Sensitivity analysis (`.SENS`)** - one formulation for the three
+        flavours: the device layer produces the right-hand-side perturbation
+        `w = ∂B/∂p − (∂G/∂p)·X − s·(∂C/∂p)·X` and the analysis only has to
+        solve one adjoint system (DC, AC) or propagate the sensitivity
+        recursion (transient). DC: one solve per objective regardless of the
+        number of parameters. AC: the same adjoint over the frequency sweep.
+        Transient: the direct method with the recursion of the trajectory
+        (one factorization per step, shared by all the parameters), hooked into
+        the transient engine's step observer so the trajectory is the one a
+        plain `.TRAN` produces. Analytical d(F-B)/dp for R/C/L and V/I sources
+  - [ ] Sensitivity extras: nonlinear device parameters (diode, BJT, MOSFET),
+        `objfunc=` expressions, adjoint backward sweep for a single objective
+        at the end of a transient
   - [ ] AC extras (`.PRINT`/`.PLOT` column selection)
   - [ ] `.TF` extras (output resistance for `I(dev)` outputs is reported as a
         magnitude; the sign convention for active devices is documented)
+  - [ ] `.PZ` extras: complex poles/zeros (underdamped RLC) via a 2D search or
+        an eigenvalue solver (QZ), zeros at `s = 0`, `.PRINT`/`.PLOT` support
   - [x] MOSFET BSIM4 model (level 14, Berkeley-derived level-2 core)
+  - [x] **Pole-zero analysis (`.PZ`)** - real poles and zeros of the
+        small-signal transfer function via grid search + bisection, DC gain,
+        shared operating point and linearization
   - [ ] Preconditioning (ILU)
   - [ ] Graph partitioning (METIS) - and, for the AC path, a row-distributed
         complex LU with coordinated pivoting for million-unknown systems

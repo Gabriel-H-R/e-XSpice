@@ -7,6 +7,7 @@
 #include "Resistor.h"
 #include "../core/DaeSolution.h"
 #include "../solver/DaeMatrix.h"
+#include <complex>
 #include <stdexcept>
 
 namespace e_XSpice {
@@ -123,6 +124,52 @@ double Resistor::getVoltage() const {
     const double vp = nodes_[0] ? nodes_[0]->getVoltage() : 0.0;
     const double vn = nodes_[1] ? nodes_[1]->getVoltage() : 0.0;
     return vp - vn;
+}
+
+// ---------------------------------------------------------------
+// Sensitivity (`.SENS`): the right-hand-side perturbation w for R.
+//
+//   F[pos] += (vp-vn)/R,  F[neg] -= (vp-vn)/R
+//   G[pos][pos] = 1/R,  G[pos][neg] = -1/R  (and the mirrored pair)
+//
+// The resistor is purely conductive, so w = -(dG/dR)·X (B does not depend
+// on R and there is no charge term):
+//
+//   (dG/dR)·X = -(vp-vn)/R^2 at pos,  +(vp-vn)/R^2 at neg
+//   =>  w[pos] = +(vp-vn)/R^2,        w[neg] = -(vp-vn)/R^2
+//
+// where (vp-vn) is the PHASOR voltage difference in the AC flavour.
+// ---------------------------------------------------------------
+bool Resistor::loadSensitivity(const std::string& param_name,
+                               const DaeSolution& x,
+                               const SensitivityContext& ctx,
+                               std::vector<double>& w_re,
+                               std::vector<double>& w_im,
+                               std::vector<double>& dqdp_re) const {
+    (void)ctx; (void)dqdp_re;   // a resistor has no state
+    if (param_name != "R" && param_name != "r") return false;
+    const int ip = rowOf(nodes_[0]);
+    const int in = rowOf(nodes_[1]);
+
+    const std::complex<double> vp =
+        (ip >= 0) ? x.valueAt(ip) : std::complex<double>(0.0, 0.0);
+    const std::complex<double> vn =
+        (in >= 0) ? x.valueAt(in) : std::complex<double>(0.0, 0.0);
+    const std::complex<double> dv = vp - vn;
+
+    const double inv_r2 = 1.0 / (resistance_ * resistance_);
+    const double dre =  dv.real() * inv_r2;
+    const double dim =  dv.imag() * inv_r2;
+
+    if (ip >= 0) {
+        w_re[static_cast<size_t>(ip)] += dre;
+        w_im[static_cast<size_t>(ip)] += dim;
+    }
+    if (in >= 0) {
+        w_re[static_cast<size_t>(in)] -= dre;
+        w_im[static_cast<size_t>(in)] -= dim;
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------
