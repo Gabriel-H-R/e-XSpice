@@ -1,0 +1,16 @@
+* Harmonic balance of a NONLINEAR circuit (end-to-end CLI test): a diode
+* clipper driven at 1 kHz.
+*
+*   .MODEL DMOD D(IS=1e-12 RS=0 N=1)
+*   V1 in 0 DC 0 SIN(0 0.5 1k 0 0 90) AC 0.5
+*   R1 in out 1k
+*   D1 out 0 DMOD
+*
+* The third harmonic must be present (the diode distorts) and the CSV
+* carries one row per harmonic.
+.MODEL DMOD D(IS=1e-12 RS=0 N=1)
+V1 in 0 DC 0 SIN(0 0.5 1k 0 0 90) AC 0.5
+R1 in out 1k
+D1 out 0 DMOD
+.HB 1k 3
+.END

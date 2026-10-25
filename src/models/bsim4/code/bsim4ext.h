@@ -22,6 +22,12 @@ BSIM4 model is supported by the members of Silicon Integration Initiative's Comp
 standard can be found at: http://www.si2.org/cmc 
 */
 
+#include "spice.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #ifdef __STDC__
 extern int BSIM4acLoad(GENmodel *,CKTcircuit*);
 extern int BSIM4ask(CKTcircuit *,GENinstance*,int,IFvalue*,IFvalue*);
@@ -68,3 +74,7 @@ extern int BSIM4noise();
 extern int BSIM4unsetup();
 
 #endif /* stdc */
+
+#ifdef __cplusplus
+}
+#endif

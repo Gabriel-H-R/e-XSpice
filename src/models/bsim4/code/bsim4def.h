@@ -3647,6 +3647,8 @@ typedef struct sBSIM4model
 #define BSIM4_MULT_I                  1280
 #define BSIM4_MULT_Q                  1281
 #define BSIM4_MULT_FN                 1282
+
+#include "devdefs.h"   /* e-XSpice SPICE shim: GENmodel, CKTcircuit, etc. */
 #include "bsim4ext.h"
 
 #ifdef __STDC__

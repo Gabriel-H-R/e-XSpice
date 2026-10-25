@@ -90,6 +90,32 @@ double CurrentSource::getPower() const {
 // flavour the parameter is the AC magnitude: B_ac carries -I_ac at pos,
 // hence dB_ac/d(mag) = -e^{jφ} at pos.
 // ---------------------------------------------------------------
+// ---------------------------------------------------------------
+// Harmonic balance excitation.
+//
+// A source carries two ALTERNATIVE excitations: the time-domain waveform
+// (what the transient uses) and the `AC` phasor (what the frequency-domain
+// analyses use). The HB is a frequency-domain analysis, so a source with an
+// `AC` spec is driven by the phasor: its time-domain contribution is
+// Re{B·e^{jωt}}, and the DFT of that gives exactly the phasor back.
+// ---------------------------------------------------------------
+void CurrentSource::loadHBExcitation(double time, double omega,
+                                     std::vector<double>& B) const {
+    if (!waveform_.hasAC()) {
+        loadB(time, B);
+        return;
+    }
+    const int ip = rowOf(nodes_[0]);
+    const int in = rowOf(nodes_[1]);
+    double re = 0.0, im = 0.0;
+    waveform_.acPhasor(re, im);
+    const double c = std::cos(omega * time);
+    const double s = std::sin(omega * time);
+    const double val = re * c - im * s;
+    if (ip >= 0) B[static_cast<size_t>(ip)] -= val;
+    if (in >= 0) B[static_cast<size_t>(in)] += val;
+}
+
 bool CurrentSource::loadSensitivity(const std::string& param_name,
                                     const DaeSolution& x,
                                     const SensitivityContext& ctx,

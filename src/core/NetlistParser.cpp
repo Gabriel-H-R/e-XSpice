@@ -688,9 +688,18 @@ bool NetlistParser::parseSourceSpec(const std::vector<std::string>& tokens,
         }
         waveform = SourceWaveform::dc(p[0]);
         i = first_param + 2;   // consumed "DC <value>"
-        // Anything after may still be the AC spec.
+        // SPICE also allows a waveform AFTER the DC value
+        // ("V1 1 0 DC 0 SIN(...)"): the waveform is then the transient's
+        // excitation. Without this the waveform would be silently DROPPED
+        // and the source would be a plain DC source in the transient.
         for (size_t k = i; k < tokens.size(); ++k) {
-            if (toUpper(tokens[k]) == "AC") return parseACSpec(tokens, k + 1, waveform);
+            const std::string t = toUpper(tokens[k]);
+            if (t == "AC") return parseACSpec(tokens, k + 1, waveform);
+            if (t == "PULSE" || t == "SIN" || t == "PWL") {
+                // Re-parse from the waveform keyword (it carries its own
+                // offset, which supersedes the value given before it).
+                return parseSourceSpec(tokens, k, waveform, circuit);
+            }
         }
         return true;
     }
@@ -892,8 +901,36 @@ bool NetlistParser::parseCommand(const std::vector<std::string>& tokens) {
             const std::string body = opt.substr(0, opt.find('='));
             const std::string value = (opt.find('=') != std::string::npos)
                                     ? opt.substr(opt.find('=') + 1) : "";
-            if (body == "NOFAIL") {
-                // Keep the sweep going past a non-converged point (the row
+            if (body == "HBINT") {
+                // The Xyce harmonic balance option block:
+                //   .OPTIONS HBINT NUMFREQ=<n>
+                // (the block is a sequence of key=value tokens, so the
+                // entries follow the HBINT token).
+                size_t k2 = k + 1;
+                for (; k2 < tokens.size(); ++k2) {
+                    const std::string e = toUpper(tokens[k2]);
+                    if (e.rfind("NUMFREQ=", 0) == 0) {
+                        const std::string v = tokens[k2].substr(8);
+                        analysis_params_.hb_nharmonics =
+                            std::max(1, std::atoi(v.c_str()));
+                        ++k2;
+                        continue;
+                    }
+                    if (e.rfind("NUMHARM=", 0) == 0) {
+                        const std::string v = tokens[k2].substr(8);
+                        analysis_params_.hb_nharmonics =
+                            std::max(1, std::atoi(v.c_str()));
+                        ++k2;
+                        continue;
+                    }
+                    if (e.rfind("NUMTPTS=", 0) == 0) {
+                        ++k2;   // accepted and ignored (the grid is automatic)
+                        continue;
+                    }
+                    break;
+                }
+                k = k2 - 1;
+            } else if (body == "NOFAIL") {                // Keep the sweep going past a non-converged point (the row
                 // is flagged and holds the last converged solution).
                 analysis_params_.opt_nofail = true;
             } else if (body == "RETRY" || body == "MAXRETRY") {
@@ -1135,6 +1172,34 @@ bool NetlistParser::parseCommand(const std::vector<std::string>& tokens) {
                       << analysis_params_.pz_in1 << "," << analysis_params_.pz_in2
                       << ") " << kind << std::endl;
         }
+    } else if (cmd == ".HB") {
+        // .HB <fundamental frequency> [number of harmonics]
+        // (Xyce: `.HB 1e4` with the harmonics set by `.OPTIONS HBINT
+        //        NUMFREQ=<n>`; the optional second token here is a
+        //        convenience.)
+        if (tokens.size() < 2) {
+            setError(".HB requires a fundamental frequency");
+            return false;
+        }
+        double f = parseValue(tokens[1]);
+        if (!(f > 0.0)) {
+            setError(".HB has a bad fundamental frequency: '" + tokens[1] + "'");
+            return false;
+        }
+        analysis_params_.hb_frequency = f;
+        if (tokens.size() > 2) {
+            const double nh = parseValue(tokens[2]);
+            if (nh >= 1.0) {
+                analysis_params_.hb_nharmonics = static_cast<int>(nh);
+            }
+        }
+        analysis_params_.type = AnalysisType::HB;
+        analysis_params_.want_hb = true;
+        if (verbose_) {
+            std::cout << "  Analysis: HB f = " << f << " Hz, "
+                      << analysis_params_.hb_nharmonics << " harmonic(s)"
+                      << std::endl;
+        }
     } else if (cmd == ".SENS") {
         // .SENS V(out) [param1, param2, ...]        (ngspice style)
         // .SENS objfunc=V(out) param=R1,R2            (Xyce style)
@@ -1280,6 +1345,143 @@ bool NetlistParser::parseCommand(const std::vector<std::string>& tokens) {
         }
     } else if (cmd == ".MODEL") {
         return parseModel(tokens);
+    } else if (cmd == ".FOUR") {
+        // .FOUR <freq> <ov> [ov]*
+        // Fourier analysis of the transient output.
+        if (tokens.size() < 3) {
+            setError(".FOUR requires: .FOUR <freq> <variable> [...]");
+            return false;
+        }
+        AnalysisParameters::FourierSpec fs;
+        double f = parseValue(tokens[1]);
+        if (!(f > 0.0)) {
+            setError(".FOUR has a bad frequency: '" + tokens[1] + "'");
+            return false;
+        }
+        fs.frequency = f;
+        // The remaining tokens are variables (V(...)/I(...)) in the
+        // tokenized form: reassemble parenthesized ones.
+        size_t k = 2;
+        while (k < tokens.size()) {
+            if (tokens[k] == "V" || toUpper(tokens[k]) == "I" ||
+                tokens[k] == "v" || tokens[k] == "i") {
+                if (k + 1 < tokens.size() && tokens[k + 1] == "(") {
+                    size_t close = k + 2;
+                    while (close < tokens.size() && tokens[close] != ")") ++close;
+                    std::string spec;
+                    for (size_t t = k; t <= close && t < tokens.size(); ++t) spec += tokens[t];
+                    fs.variables.push_back(spec);
+                    k = close + 1;
+                    continue;
+                }
+            }
+            fs.variables.push_back(tokens[k]);
+            ++k;
+        }
+        if (fs.variables.empty()) {
+            setError(".FOUR requires at least one output variable");
+            return false;
+        }
+        analysis_params_.four_specs.push_back(fs);
+        if (verbose_) {
+            std::cout << "  Analysis: FOUR f=" << f << " Hz on "
+                      << fs.variables.size() << " variable(s)" << std::endl;
+        }
+    } else if (cmd == ".MEASURE" || cmd == ".MEAS") {
+        // .MEASURE <TRAN|DC|AC|NOISE> <name> <type> ...
+        if (tokens.size() < 4) {
+            setError(".MEASURE requires: .MEASURE <mode> <name> <type> ...");
+            return false;
+        }
+        AnalysisParameters::MeasureSpec ms;
+        ms.mode = toUpper(tokens[1]);
+        ms.name = tokens[2];
+        ms.type = toUpper(tokens[3]);
+        // The next token may be a variable (V(...)/I(...)) or a qualifier.
+        size_t k = 4;
+        // Reassemble the variable if it is parenthesized.
+        if (k < tokens.size() && (tokens[k] == "V" || toUpper(tokens[k]) == "I" ||
+                                 tokens[k] == "v" || tokens[k] == "i") &&
+            k + 1 < tokens.size() && tokens[k + 1] == "(") {
+            size_t close = k + 2;
+            while (close < tokens.size() && tokens[close] != ")") ++close;
+            std::string spec;
+            for (size_t t = k; t <= close && t < tokens.size(); ++t) spec += tokens[t];
+            ms.variable = spec;
+            k = close + 1;
+        } else if (k < tokens.size() && (tokens[k].find("V(") == 0 ||
+                                          tokens[k].find("I(") == 0 ||
+                                          tokens[k].find("v(") == 0 ||
+                                          tokens[k].find("i(") == 0)) {
+            ms.variable = tokens[k];
+            ++k;
+        }
+
+        // The qualifiers.
+        for (; k < tokens.size(); ++k) {
+            const std::string tok = tokens[k];
+            const std::string u = toUpper(tok);
+            size_t eq = u.find('=');
+            if (eq != std::string::npos) {
+                const std::string key = u.substr(0, eq);
+                const std::string val = tok.substr(eq + 1);
+                if (key == "FROM") { ms.has_from = true; ms.from = parseValue(val); }
+                else if (key == "TO") { ms.has_to = true; ms.to = parseValue(val); }
+                else if (key == "TD") { ms.has_td = true; ms.td = parseValue(val); }
+                else if (key == "AT") { ms.has_at = true; ms.at = parseValue(val); }
+                else if (key == "RISE") { ms.has_rise = true; ms.rise = std::atoi(val.c_str()); }
+                else if (key == "FALL") { ms.has_fall = true; ms.fall = std::atoi(val.c_str()); }
+                else if (key == "CROSS") { ms.has_cross = true; ms.cross = std::atoi(val.c_str()); }
+                else if (key == "MINVAL") { ms.minval = parseValue(val); }
+                else if (key == "DEFAULT_VAL" || key == "DEFAULTVAL") { ms.default_val = parseValue(val); }
+                else if (key == "NUMFREQ") { (void)val; }
+                else if (key == "GRIDSIZE") { (void)val; }
+                else if (key == "PRECISION") { ms.precision = std::atoi(val.c_str()); }
+                else if (key == "ON") { (void)val; }
+                else if (key == "OFF") { (void)val; }
+                else if (key == "RFC_LEVEL" || key == "RFCLEVEL") { (void)val; }
+                else if (key == "PRINT") { (void)val; }
+                else if (key == "OUTPUT") { (void)val; }
+                else if (key == "DEFAULT_VAL") { ms.default_val = parseValue(val); }
+            } else if (u == "TRIG") {
+                // Reassemble the trigger expression: TRIG V(...) = value
+                ++k;
+                std::string expr;
+                while (k < tokens.size() && toUpper(tokens[k]) != "TARG") {
+                    expr += tokens[k];
+                    ++k;
+                }
+                ms.trigger = expr;
+                --k;
+            } else if (u == "TARG") {
+                ++k;
+                std::string expr;
+                while (k < tokens.size()) {
+                    expr += tokens[k];
+                    ++k;
+                }
+                ms.target = expr;
+                break;
+            } else if (u == "WHEN") {
+                ++k;
+                std::string expr;
+                while (k < tokens.size()) {
+                    expr += tokens[k];
+                    ++k;
+                }
+                ms.when_expr = expr;
+                break;
+            } else if (u == "FIND") {
+                // FIND is implicit in the type token handling below; the
+                // variable has already been consumed above.
+            }
+        }
+
+        analysis_params_.measures.push_back(ms);
+        if (verbose_) {
+            std::cout << "  Analysis: MEASURE " << ms.mode << " " << ms.name
+                      << " " << ms.type << " " << ms.variable << std::endl;
+        }
     } else if (cmd == ".END") {
         // handled in parseString
     } else {

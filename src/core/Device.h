@@ -155,7 +155,15 @@ public:
      * The base implementation stores the map so rowOf() works; devices may
      * override to derive additional local indices.
      */
-    void setTopology(const std::vector<int>& node_map) {
+    /**
+     * @brief SETUP: informs the device about the matrix layout.
+     *
+     * Equivalent of Xyce's registerLIDs phase. Called by the analysis once,
+     * after the node map is built and before the pattern is registered.
+     * The base implementation stores the map so rowOf() works; devices may
+     * override to derive additional local indices.
+     */
+    virtual void setTopology(const std::vector<int>& node_map) {
         node_map_ = &node_map;
         assignIndices();
     }
@@ -422,6 +430,45 @@ public:
         return false;
     }
 
+    /**
+     * @brief Loads the PERIODIC EXCITATION of this device for the harmonic
+     *        balance analysis.
+     *
+     * A source carries two ALTERNATIVE excitations: its time-domain
+     * waveform (DC, PULSE, SIN, PWL — what the transient uses) and its `AC`
+     * phasor (what the frequency-domain analyses use). The harmonic balance
+     * analysis is a frequency-domain analysis, so a source that carries an
+     * `AC` spec is driven by the phasor (and the others by their waveform,
+     * which must then be periodic over the period of the fundamental).
+     *
+     * The default is the time-domain waveform, which is what a source
+     * without an `AC` spec must use.
+     *
+     * @param time  the phase point (s)
+     * @param omega the fundamental angular frequency (rad/s)
+     * @param B     the excitation vector (output)
+     */
+    virtual void loadHBExcitation(double time, double omega,
+                                  std::vector<double>& B) const {
+        (void)omega;
+        loadB(time, B);
+    }
+
+    /**
+     * @brief Enables/disables the Newton junction limiting (PNJLIM).
+     *
+     * The limiting clamps the junction voltage when the Newton step
+     * overshoots — it is a CONVERGENCE AID of the time-domain solver, and
+     * it changes the residual that is evaluated.
+     *
+     * The harmonic balance analysis runs its own convergence control and
+     * evaluates the devices at MANY points of a period, so the limiting
+     * would distort the residual it is trying to solve: it is turned off
+     * there (Xyce has the same switch, `.OPTIONS HBINT VOLTLIM`).
+     */
+    void setLimitingEnabled(bool on) { limiting_enabled_ = on; }
+    bool limitingEnabled() const { return limiting_enabled_; }
+
     // ---------------------------------------------------------------
     // OPERATING MODES
     // ---------------------------------------------------------------
@@ -603,6 +650,7 @@ protected:
     std::vector<int> jac_slots_;   // NNZ slots for the registered pattern
 
     bool ic_operating_point_ = false;
+    bool limiting_enabled_ = true;
 };
 
 } // namespace e_XSpice

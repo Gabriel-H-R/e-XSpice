@@ -72,6 +72,11 @@ public:
                          std::vector<double>& w_im,
                          std::vector<double>& dqdp_re) const override;
 
+    // Harmonic balance excitation: the AC phasor when there is one, the
+    // time-domain waveform otherwise.
+    void loadHBExcitation(double time, double omega,
+                          std::vector<double>& B) const override;
+
     // Getters / setters
     double getValue(double t = 0.0) const { return waveform_.value(t); }
     const SourceWaveform& waveform() const { return waveform_; }

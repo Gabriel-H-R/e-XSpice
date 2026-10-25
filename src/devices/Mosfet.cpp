@@ -12,9 +12,11 @@
 #include "../models/core_models/Junction.h"
 #include "../models/core_models/MosfetBSIM4Device.h"
 #include "../models/core_models/MosfetBSIM4Model.h"
+#include "../models/external/BSim4Adapter.h"
 
 #include <algorithm>
 #include <cstdio>
+#include <iostream>
 #include <stdexcept>
 
 namespace e_XSpice {
@@ -57,19 +59,41 @@ Mosfet::Mosfet(const std::string& name,
 
     // ---- BSIM4 level-2 support ----
     // If the card is LEVEL=2, build a dedicated BSIM4 model card and device
-    // evaluator. The MosfetModel (level-1) and MosfetBSIM4Model (level-2)
-    // are separate classes; we cannot cast between them.
+    // evaluator. Two implementations are available:
+    //   - Reference C++ (MosfetBSIM4Device): pure C++ subset, always works.
+    //   - Berkeley C kernel (BSim4Adapter): wraps the upstream BSIM4 C code
+    //     (b4ld.c/b4temp.c) verbatim via the SPICE shim. Selected with
+    //     USEBERKELEYKERNEL=1 on the MOSFET instance line.
+    // The MosfetModel (level-1) and MosfetBSIM4Model (level-2) are separate
+    // classes; we cannot cast between them.
     if (model_->isBSIM4()) {
         bsim4Model_ = rcp_static_cast<const MosfetBSIM4Model>(model_);
-        bsim4Device_ = new MosfetBSIM4Device(bsim4Model_,
-                                           inst_.W, inst_.L, inst_.M, inst_.M);
-        bsim4Device_->setPolarity(bsim4Model_->isNmos() ? 1 : -1);
+        if (!bsim4Model_) {
+            throw std::invalid_argument("MOSFET: BSIM4 model card cast failed");
+        }
         p_ = bsim4Model_->isNmos() ? 1 : -1;
-        if (inst_.TEMPGiven) {
-            ownThermalBSIM4_ = bsim4Model_->computeThermal(inst_.TEMP + inst_.DTEMP);
-            bsim4Device_->setThermal(&ownThermalBSIM4_);
+        useBerkeleyKernel_ = inst_.useBerkeleyKernel;
+        p_ = bsim4Model_->isNmos() ? 1 : -1;
+        useBerkeleyKernel_ = inst_.useBerkeleyKernel;
+
+        if (useBerkeleyKernel_) {
+            // Berkeley C kernel via adapter: wraps BSIM4load/b4temp.c.
+            bsim4Adapter_ = new BSim4Adapter(bsim4Model_,
+                                             {drain, gate, source, bulk},
+                                             inst_.W, inst_.L, inst_.M,
+                                             inst_.AD > 0.0 ? inst_.AD : 1.0e-12);
         } else {
-            bsim4Device_->setThermal(&bsim4Model_->thermal());
+            // Reference C++ implementation.
+            bsim4Device_ = new MosfetBSIM4Device(bsim4Model_,
+                                                 inst_.W, inst_.L, inst_.M,
+                                                 inst_.M);
+            bsim4Device_->setPolarity(bsim4Model_->isNmos() ? 1 : -1);
+            if (inst_.TEMPGiven) {
+                ownThermalBSIM4_ = bsim4Model_->computeThermal(inst_.TEMP + inst_.DTEMP);
+                bsim4Device_->setThermal(&ownThermalBSIM4_);
+            } else {
+                bsim4Device_->setThermal(&bsim4Model_->thermal());
+            }
         }
     } else {
         p_ = level1Model()->isNmos() ? 1 : -1;
@@ -91,8 +115,9 @@ Mosfet::Mosfet(const std::string& name,
 
     // Setup-time geometry (never recomputed in the loops).
     // BSIM4 level-2 computes its own geometry internally; level-1 needs
-    // these precomputed values.
-    if (!bsim4Device_) {
+    // these precomputed values. When using the Berkeley C kernel adapter,
+    // geometry is handled inside the adapter, so skip level-1 precompute.
+    if (!bsim4Device_ && !useBerkeleyKernel_) {
         leff_ = inst_.L - 2.0 * level1Model()->LD;
         if (leff_ <= 0.0) {
             throw std::invalid_argument("MOSFET Leff = L − 2·LD must be positive");
@@ -116,6 +141,7 @@ Mosfet::Mosfet(const std::string& name,
 
 Mosfet::~Mosfet() {
     delete bsim4Device_;
+    delete bsim4Adapter_;
 }
 
 // ===============================================================
@@ -128,9 +154,36 @@ void Mosfet::setCircuitTemperature(double kelvin) {
     // inside evaluate() (it reads the card snapshot live), so nothing to
     // refresh. Level-1 precomputed cox at construction time.
     if (bsim4Device_ || inst_.TEMPGiven) return;
+    if (bsim4Adapter_) {
+        bsim4Adapter_->setCircuitTemperature(kelvin);
+        return;
+    }
     auto card = level1Model();
     if (!card) return;
     cox_ = thermal_->coxPrime * inst_.W * leff_ * inst_.M;
+}
+
+void Mosfet::assignIndices() {
+    Device::assignIndices();
+    if (bsim4Adapter_) {
+        const int r[4] = {rowOf(nodes_[0]), rowOf(nodes_[1]),
+                          rowOf(nodes_[2]), rowOf(nodes_[3])};
+        bsim4Adapter_->setNodeRows(r[0], r[1], r[2], r[3]);
+    }
+}
+
+void Mosfet::setJacobianSlots(const std::vector<int>& slots) {
+    Device::setJacobianSlots(slots);
+    if (bsim4Adapter_) {
+        bsim4Adapter_->setJacobianSlots(slots);
+    }
+}
+
+void Mosfet::setTopology(const std::vector<int>& node_map) {
+    Device::setTopology(node_map);
+    if (bsim4Adapter_) {
+        bsim4Adapter_->setTopology(node_map);
+    }
 }
 
 RCP<Mosfet> Mosfet::makeNmos(const std::string& name, Node* drain,
@@ -174,6 +227,17 @@ void Mosfet::beginSolve(bool initial_solve) {
     // (it would segfault below) — the device owns its own history.
     if (bsim4Device_) {
         bsim4Device_->beginSolve(initial_solve);
+        if (initial_solve) {
+            vbs_prev_ = 0.5;
+            vbd_prev_ = 0.0;
+            vgs_prev_ = 0.0;
+            vds_prev_ = 0.0;
+            first_solve_ = true;
+        }
+        return;
+    }
+    if (bsim4Adapter_) {
+        // Berkeley C kernel adapter handles its own state internally.
         if (initial_solve) {
             vbs_prev_ = 0.5;
             vbd_prev_ = 0.0;
@@ -448,8 +512,7 @@ void Mosfet::pullBSIM4() const {
 void Mosfet::loadF(const DaeSolution& x, double time,
                    std::vector<double>& F) const {
     (void)time;
-    // BSIM4 level-2 path: evaluate in the device (its own limited
-    // voltages), then pull the results into this wrapper's members.
+    // BSIM4 level-2 path with reference C++ device.
     if (bsim4Device_) {
         const int r[4] = {rowOf(nodes_[0]), rowOf(nodes_[1]),
                           rowOf(nodes_[2]), rowOf(nodes_[3])};
@@ -460,6 +523,23 @@ void Mosfet::loadF(const DaeSolution& x, double time,
         bsim4Device_->loadF(F, r[0], r[1], r[2], r[3]);
         pullBSIM4();
         bsim4Device_->commitLimited();
+        first_solve_ = false;
+        return;
+    }
+    // BSIM4 level-2 path with Berkeley C kernel adapter.
+    if (bsim4Adapter_) {
+        // Set up RHS pointer and call adapter's loadF (which calls
+        // BSIM4load internally, stamping ceq directly into F).
+        bsim4Adapter_->setRhsPtr(F.data());
+        bsim4Adapter_->loadF(x, time, F);
+        // Pull outputs from adapter for reporting.
+        id_ = bsim4Adapter_->getDrainCurrent();
+        is_ = bsim4Adapter_->getSourceCurrent();
+        ib_ = bsim4Adapter_->getBulkCurrent();
+        gm_ = bsim4Adapter_->getGm();
+        vth_cached_ = bsim4Adapter_->getVth();
+        saturated_ = false;  // adapter doesn't track saturation in this subset
+        limiting_active_ = false;
         first_solve_ = false;
         return;
     }
@@ -523,7 +603,7 @@ void Mosfet::applySolutionLimit(std::vector<double>& x) const {
 void Mosfet::loadQ(const DaeSolution& x, double time,
                    std::vector<double>& Q) const {
     (void)time;
-    // BSIM4 level-2 path
+    // BSIM4 level-2 path with reference C++ device.
     if (bsim4Device_) {
         const int r[4] = {rowOf(nodes_[0]), rowOf(nodes_[1]),
                           rowOf(nodes_[2]), rowOf(nodes_[3])};
@@ -534,6 +614,11 @@ void Mosfet::loadQ(const DaeSolution& x, double time,
         bsim4Device_->loadQ(Q, r[0], r[1], r[2], r[3]);
         pullBSIM4();
         bsim4Device_->commitLimited();
+        first_solve_ = false;
+        return;
+    }
+    // BSIM4 level-2 path with Berkeley C kernel adapter (no charge model).
+    if (bsim4Adapter_) {
         first_solve_ = false;
         return;
     }
@@ -554,9 +639,18 @@ void Mosfet::loadQ(const DaeSolution& x, double time,
 void Mosfet::loadJacobianF(DaeMatrix& J, const DaeSolution& x,
                            double time) const {
     (void)x; (void)time;
-    // BSIM4 level-2 path
+    // BSIM4 level-2 path with reference C++ device.
     if (bsim4Device_) {
         bsim4Device_->loadJacobianF(J, jac_slots_);
+        return;
+    }
+    // BSIM4 level-2 path with Berkeley C kernel adapter.
+    if (bsim4Adapter_) {
+        // Set up matrix values pointer for the SMPaddElt shim, then call
+        // adapter's loadJacobianF (which calls BSIM4load internally and
+        // emits cached conductances into J via pre-resolved slots).
+        bsim4Adapter_->setMatrixValues(J.values().data());
+        bsim4Adapter_->loadJacobianF(J, x, time);
         return;
     }
     for (int k = 0; k < 16; ++k) emit(J, k, ef_[k]);
@@ -565,16 +659,20 @@ void Mosfet::loadJacobianF(DaeMatrix& J, const DaeSolution& x,
 void Mosfet::loadJacobianQ(DaeMatrix& J, const DaeSolution& x,
                            double time) const {
     (void)x; (void)time;
-    // BSIM4 level-2 path
+    // BSIM4 level-2 path with reference C++ device.
     if (bsim4Device_) {
         bsim4Device_->loadJacobianQ(J, jac_slots_);
+        return;
+    }
+    // BSIM4 level-2 path with Berkeley C kernel adapter (no charge model).
+    if (bsim4Adapter_) {
         return;
     }
     for (int k = 0; k < 16; ++k) emit(J, k, eq_[k]);
 }
 
 void Mosfet::storeState(const DaeSolution& x, StateStore& store) const {
-    // BSIM4 level-2 path (pull fills qg_/qd_/qb_ for the lines below).
+    // BSIM4 level-2 path with reference C++ device.
     if (bsim4Device_) {
         bsim4Device_->limitedVoltages(x, rowOf(nodes_[0]), rowOf(nodes_[1]),
                                     rowOf(nodes_[2]), rowOf(nodes_[3]),
@@ -585,6 +683,10 @@ void Mosfet::storeState(const DaeSolution& x, StateStore& store) const {
         pullBSIM4();
         const double q[3] = {qg_, qd_, qb_};
         store.setDeviceQ(state_index_, q, 3);
+        return;
+    }
+    // BSIM4 level-2 path with Berkeley C kernel adapter (no charge model).
+    if (bsim4Adapter_) {
         return;
     }
 
@@ -599,7 +701,7 @@ void Mosfet::loadChargeHistory(const StateStore& store, double q_coeff,
                                std::vector<double>& rhs) const {
     if (q_coeff == 0.0) return;
 
-    // BSIM4 level-2 path
+    // BSIM4 level-2 path with reference C++ device.
     if (bsim4Device_) {
         const int rd = rowOf(nodes_[0]);
         const int rg = rowOf(nodes_[1]);
@@ -618,6 +720,10 @@ void Mosfet::loadChargeHistory(const StateStore& store, double q_coeff,
         if (rg >= 0) rhs[rg] += p_ * qg;
         if (rs >= 0) rhs[rs] += p_ * qs;
         if (rb >= 0) rhs[rb] += p_ * qb;
+        return;
+    }
+    // BSIM4 level-2 path with Berkeley C kernel adapter (no charge model).
+    if (bsim4Adapter_) {
         return;
     }
 
@@ -642,7 +748,7 @@ void Mosfet::loadChargeHistory(const StateStore& store, double q_coeff,
 
 void Mosfet::refreshOutputs(const DaeSolution& x, double time) const {
     (void)time;
-    // BSIM4 level-2 path (no limiting on the converged point).
+    // BSIM4 level-2 path with reference C++ device (no limiting on converged point).
     if (bsim4Device_) {
         bsim4Device_->limitedVoltages(x, rowOf(nodes_[0]), rowOf(nodes_[1]),
                                     rowOf(nodes_[2]), rowOf(nodes_[3]),
@@ -654,6 +760,16 @@ void Mosfet::refreshOutputs(const DaeSolution& x, double time) const {
         vgs_cached_ = p_ * bsim4Device_->vgsLim();
         vds_cached_ = p_ * bsim4Device_->vdsLim();
         vbs_cached_ = p_ * bsim4Device_->vbsLim();
+        return;
+    }
+    // BSIM4 level-2 path with Berkeley C kernel adapter.
+    if (bsim4Adapter_) {
+        // Adapter already updated its caches during loadF; just pull outputs.
+        id_ = bsim4Adapter_->getDrainCurrent();
+        is_ = bsim4Adapter_->getSourceCurrent();
+        ib_ = bsim4Adapter_->getBulkCurrent();
+        gm_ = bsim4Adapter_->getGm();
+        vth_cached_ = bsim4Adapter_->getVth();
         return;
     }
 
@@ -682,6 +798,7 @@ void Mosfet::refreshOutputs(const DaeSolution& x, double time) const {
 
 bool Mosfet::acceptSolution() const {
     if (bsim4Device_) return bsim4Device_->acceptSolution();
+    if (bsim4Adapter_) return bsim4Adapter_->acceptSolution();
     return !limiting_active_;
 }
 
@@ -704,11 +821,17 @@ void Mosfet::resetIterationState(const DaeSolution& x) {
     if (bsim4Device_) {
         bsim4Device_->resetHistory(vgs_prev_, vds_prev_, vbs_prev_);
     }
+    // Berkeley adapter handles its own history internally.
 }
 
 void Mosfet::confirmAccept() {
     if (bsim4Device_) {
         bsim4Device_->confirmAccept();
+        limiting_active_ = false;
+        return;
+    }
+    if (bsim4Adapter_) {
+        bsim4Adapter_->confirmAccept();
         limiting_active_ = false;
         return;
     }

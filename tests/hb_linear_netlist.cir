@@ -1,0 +1,15 @@
+* Harmonic balance of a LINEAR circuit (end-to-end CLI test).
+*
+*   V1 in 0 DC 0 AC 1
+*   R1 in out 1k
+*   C1 out 0 1u
+*
+* The fundamental must reproduce the AC analysis of the same circuit:
+*   |V(out)| = 1/sqrt(1+(wRC)^2) = 0.157177 at 1 kHz
+*   arg(V(out)) = -atan(wRC) = -80.9569 deg
+* and the higher harmonics must vanish (a linear circuit has no distortion).
+V1 in 0 DC 0 AC 1
+R1 in out 1k
+C1 out 0 1u
+.HB 1k 3
+.END

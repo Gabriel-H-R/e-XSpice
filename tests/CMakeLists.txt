@@ -64,6 +64,10 @@ target_link_libraries(test_noise e-XSpice_lib)
 add_executable(test_sens test_sens.cpp)
 target_link_libraries(test_sens e-XSpice_lib)
 
+# 8j. Harmonic balance analysis (.HB)
+add_executable(test_hb test_hb.cpp)
+target_link_libraries(test_hb e-XSpice_lib)
+
 # DC convergence diagnostics: current-source biased BJT (limiting walk)
 add_executable(debug_bjt_dc debug_bjt_dc.cpp)
 target_link_libraries(debug_bjt_dc e-XSpice_lib)
@@ -85,6 +89,7 @@ add_test(NAME Complex_LU COMMAND test_complex_lu)
 add_test(NAME AC_Analysis COMMAND test_ac)
 add_test(NAME Noise_Analysis COMMAND test_noise)
 add_test(NAME Sensitivity_Analysis COMMAND test_sens)
+add_test(NAME Harmonic_Balance COMMAND test_hb)
 
 # RL step debug
 add_executable(debug_rl debug_rl.cpp)
@@ -306,6 +311,30 @@ if(MPIEXEC_EXECUTABLE)
                      -DMPI_NP=2
                      -P ${CMAKE_CURRENT_SOURCE_DIR}/check_csv.cmake)
 endif()
+
+# ================================================================
+# Harmonic balance (.HB) — end to end through the CLI
+# ================================================================
+# A linear circuit: the fundamental must reproduce the AC analysis and the
+# higher harmonics must vanish (the CSV carries one row per harmonic).
+add_test(NAME HB_Netlist_Linear
+         COMMAND ${CMAKE_COMMAND}
+                 -DBINARY=$<TARGET_FILE:e-XSpice>
+                 -DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/hb_linear_netlist.cir
+                 -DEXPECT_ROWS=4
+                 -DEXPECT_HEADER=harmonic,frequency_hz,Vin_mag,Vin_phase_deg,Vout_mag,Vout_phase_deg
+                 -DEXPECT_CONTENT_REGEX=1,1000,1,[^\n]*,0.15717[^\n]*
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/check_csv.cmake)
+
+# A nonlinear circuit: the third harmonic must be present.
+add_test(NAME HB_Netlist_Clipper
+         COMMAND ${CMAKE_COMMAND}
+                 -DBINARY=$<TARGET_FILE:e-XSpice>
+                 -DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/hb_clipper_netlist.cir
+                 -DEXPECT_ROWS=4
+                 -DEXPECT_HEADER=harmonic,frequency_hz,Vin_mag,Vin_phase_deg,Vout_mag,Vout_phase_deg
+                 -DEXPECT_CONTENT_REGEX=3,3000[^\n]*
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/check_csv.cmake)
 
 # ================================================================
 # NOISE analysis (.NOISE) — end to end through the CLI

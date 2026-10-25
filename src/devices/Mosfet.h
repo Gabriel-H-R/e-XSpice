@@ -58,6 +58,7 @@
 #include "../models/core_models/MosfetModel.h"
 #include "../models/core_models/MosfetBSIM4Model.h"
 #include "../models/core_models/MosfetBSIM4Device.h"
+#include "../models/external/BSim4Adapter.h"
 #include <cmath>
 
 namespace e_XSpice {
@@ -163,8 +164,11 @@ public:
     RCP<const DeviceModel> model() const { return model_; }
     const MosfetInstanceParams& instanceParams() const { return inst_; }
 
-    /** @brief True when using a BSIM4 level-2 card. */
+    /** @brief True when the card is a BSIM4 (not the level-1 Shichman-Hodges). */
     bool isBSIM4() const { return (bool)bsim4Model_; }
+
+    /** @brief True when using the Berkeley C kernel via BSim4Adapter. */
+    bool useBerkeleyKernel() const { return useBerkeleyKernel_; }
 
     /** @brief Access the level-1 card when available (null when BSIM4). */
     RCP<const MosfetModel> level1Model() const {
@@ -184,14 +188,22 @@ public:
      */
     void setCircuitTemperature(double kelvin) override;
 
+    // ---- topology setup (forward to Berkeley adapter when active) ----
+    void assignIndices() override;
+    void setJacobianSlots(const std::vector<int>& slots) override;
+    void setTopology(const std::vector<int>& node_map) override;
+
 private:
     RCP<const DeviceModel> model_;
     MosfetInstanceParams   inst_;
 
-    // BSIM4 level-2 support: shared card + device evaluator (null when
-    // LEVEL=1 / Shichman-Hodges).
+    // BSIM4 support: shared card + device evaluator (null when the card is
+    // the level-1 Shichman-Hodges model).
     RCP<const MosfetBSIM4Model> bsim4Model_;
     MosfetBSIM4Device* bsim4Device_ = nullptr;  // owned by this Mosfet
+    // Berkeley C kernel adapter (null when using the reference C++ impl).
+    BSim4Adapter* bsim4Adapter_ = nullptr;  // owned by this Mosfet
+    bool useBerkeleyKernel_ = false;
 
     const MosfetThermal* thermal_ = nullptr;
     MosfetThermal ownThermal_;

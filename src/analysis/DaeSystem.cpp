@@ -179,7 +179,6 @@ void DaeSystem::assembleVectors(double time, double q_coeff) {
         if (q_coeff != 0.0) d->loadQ(sol, time, Q_);
         d->loadB(time, B_);
     };
-
     // Small circuits: the serial path avoids OpenMP overhead.
     if (nd <= 32) {
         for (size_t i = 0; i < nd; ++i) {
@@ -212,8 +211,34 @@ void DaeSystem::assembleVectors(double time, double q_coeff) {
     syncVectorBuffers();
 }
 
-void DaeSystem::syncVectorBuffers() {
-    // Fuse the per-rank partial F/Q/B into the identical global vectors.
+// ===============================================================
+// ARBITRARY-SOLUTION EVALUATION (harmonic balance)
+// ===============================================================
+
+void DaeSystem::evaluateAt(const DaeSolution& sol, double time,
+                           std::vector<double>& F, std::vector<double>& Q,
+                           std::vector<double>& B) const {
+    const size_t nd = devices_.size();
+    F.assign(static_cast<size_t>(n_), 0.0);
+    Q.assign(static_cast<size_t>(n_), 0.0);
+    B.assign(static_cast<size_t>(n_), 0.0);
+
+    // The HB path is always replicated (the harmonic solve is a dense
+    // block problem), so every device is evaluated on every rank: there is
+    // no partial-sum fusion to do here.
+    for (size_t i = 0; i < nd; ++i) {
+        Device* d = devices_[i];
+        d->loadF(sol, time, F);
+        d->loadQ(sol, time, Q);
+        d->loadB(time, B);
+    }
+}
+
+void DaeSystem::evaluateJacobiansAt(const DaeSolution& sol, double time) {
+    assembleJacobiansAt(sol, time, 0.0);
+}
+
+void DaeSystem::syncVectorBuffers() {    // Fuse the per-rank partial F/Q/B into the identical global vectors.
     // Called EXACTLY ONCE per assembly (in assembleVectors).
     //
     // The three vectors travel in a SINGLE Allreduce (packed scratch buffer)
@@ -244,6 +269,11 @@ void DaeSystem::syncJacobianBuffer() {
 
 void DaeSystem::assembleJacobians(double time, double q_coeff) {
     DaeSolution sol(x_, circuit_, node_map_);
+    assembleJacobiansAt(sol, time, q_coeff);
+}
+
+void DaeSystem::assembleJacobiansAt(const DaeSolution& sol, double time,
+                                    double q_coeff) {
     const size_t nd = devices_.size();
 
     jac_f_.zeroValues();
@@ -283,8 +313,7 @@ void DaeSystem::assembleJacobians(double time, double q_coeff) {
 }
 
 void DaeSystem::refreshLinearization(bool include_gmin) {
-    assembleJacobians(currentTime_, 0.0);
-    // The node gmin is the DC CONVERGENCE aid of the homotopy: it is what
+    assembleJacobians(currentTime_, 0.0);    // The node gmin is the DC CONVERGENCE aid of the homotopy: it is what
     // makes a floating node solvable at the operating point. It is NOT part of
     // the device physics, so a consumer that wants the linearization itself
     // (the AC analysis) leaves it out — a gmin diagonal would make every node

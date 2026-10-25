@@ -60,7 +60,8 @@ enum class AnalysisType {
     NOISE,        // .NOISE
     TF,           // .TF
     PZ,           // .PZ
-    SENSITIVITY   // .SENS
+    SENSITIVITY,  // .SENS
+    HB            // .HB (harmonic balance)
 };
 
 /**
@@ -82,6 +83,39 @@ struct AnalysisParameters {
     bool want_sens = false;     // .SENS seen
     bool sens_ac = false;       // AC sensitivity (.SENS AC ...)
     bool sens_tran = false;     // transient sensitivity (.SENS TRAN ...)
+
+    // Harmonic balance (.HB): the fundamental frequency and the number of
+    // harmonics (NUMFREQ in the Xyce `.OPTIONS HBINT` block).
+    bool want_hb = false;
+    double hb_frequency = 0.0;
+    int    hb_nharmonics = 3;
+
+    // Post-processing commands (.FOUR, .MEASURE/.MEAS). They operate on the
+    // results of the analysis that precedes them in the netlist.
+    struct FourierSpec {
+        double frequency = 0.0;
+        std::vector<std::string> variables;   // "V(out)", "I(R1)", ...
+    };
+    struct MeasureSpec {
+        std::string mode;
+        std::string name;
+        std::string type;
+        std::string variable;
+        std::string trigger;
+        std::string target;
+        double at = 0.0;
+        bool has_at = false;
+        double from = 0.0, to = 0.0, td = 0.0;
+        bool has_from = false, has_to = false, has_td = false;
+        std::string when_expr;
+        int rise = 0, fall = 0, cross = 0;
+        bool has_rise = false, has_fall = false, has_cross = false;
+        double minval = 1e-12;
+        double default_val = 0.0;
+        double precision = 6;
+    };
+    std::vector<FourierSpec> four_specs;
+    std::vector<MeasureSpec> measures;
 
     // Transfer function (.TF): OUTVAR INVAR (both tokens reassembled).
     std::string tf_out_var;

@@ -95,6 +95,7 @@ struct MosfetInstanceParams {
     double TEMP = 0.0;   // instance temperature (Kelvin, when TEMPGiven)
     double DTEMP = 0.0;  // delta temperature (K)
     bool   TEMPGiven = false;
+    int    useBerkeleyKernel = 0;  // use Berkeley C kernel via adapter (0/1)
 
     using Table = std::vector<TypedParamDesc<MosfetInstanceParams>>;
     static const Table& paramTable() {
@@ -112,6 +113,8 @@ struct MosfetInstanceParams {
                              [](MosfetInstanceParams& o) { o.TEMPGiven = true; }),
             makeParam("DTEMP", &MosfetInstanceParams::DTEMP,
                       "delta temperature (K)"),
+            makeIntParam("USEBERKELEYKERNEL", &MosfetInstanceParams::useBerkeleyKernel,
+                         "use Berkeley C kernel via BSim4Adapter (0/1)"),
         };
         return t;
     }

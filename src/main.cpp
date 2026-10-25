@@ -21,6 +21,8 @@
 #include "analysis/TFAnalysis.h"
 #include "analysis/PZAnalysis.h"
 #include "analysis/ACSensitivityAnalysis.h"
+#include "analysis/HBAnalysis.h"
+#include "analysis/MeasureEngine.h"
 #include "analysis/SensitivityAnalysis.h"
 #include "analysis/TransientSensitivityAnalysis.h"
 #include "analysis/TransientAnalysis.h"
@@ -29,6 +31,7 @@
 #include <stdio.h>
 #include <algorithm>
 #include <cmath>
+#include <complex>
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -165,6 +168,7 @@ bool simulateNetlist(const std::string& filename, bool use_mpi,
     const bool do_sens = params.want_sens || params.type == AnalysisType::SENSITIVITY;
     const bool do_dc_sensitivity =
         do_sens && !params.sens_ac && !params.sens_tran;
+    const bool do_hb = params.want_hb || params.type == AnalysisType::HB;
 
     if (do_op) {
         DCAnalysis dc(circuit);
@@ -247,10 +251,62 @@ bool simulateNetlist(const std::string& filename, bool use_mpi,
                     std::cerr << "Erro ao criar o arquivo " << csv_path << "\n";
                 }
             }
+
+            // ---- post-processing: .FOUR and .MEASURE --------------------
+            if (mpi.isMaster() && (!params.four_specs.empty() || !params.measures.empty())) {
+                std::vector<MeasureSeries> series;
+                auto lookup = [&](const std::string& var) -> MeasureSeries {
+                    for (const auto& s : series) if (s.variable == var) return s;
+                    MeasureSeries empty;
+                    return empty;
+                };
+                for (const auto& n : circuit.getNodes()) {
+                    if (n->isGround()) continue;
+                    MeasureSeries ms;
+                    ms.variable = "V(" + n->getName() + ")";
+                    for (const auto& pt : result.data) {
+                        ms.x.push_back(pt.time);
+                        int row = 0;
+                        for (const auto& nn : circuit.getNodes()) {
+                            if (nn->isGround()) continue;
+                            if (nn->getName() == n->getName()) break;
+                            ++row;
+                        }
+                        ms.y.push_back(pt.node_voltages[static_cast<size_t>(row)]);
+                    }
+                    series.push_back(ms);
+                }
+                for (const auto& fs : params.four_specs) {
+                    for (const auto& var : fs.variables) {
+                        MeasureSeries s = lookup(var);
+                        if (s.x.empty()) {
+                            std::cerr << "FOUR: variable '" << var << "' not found\n";
+                            continue;
+                        }
+                        std::cout << "\n" << MeasureEngine::fourier(fs.frequency, s)
+                                  << std::endl;
+                    }
+                }
+                if (!params.measures.empty()) {
+                    const auto results = MeasureEngine::evaluate(
+                        params.measures, series, lookup);
+                    std::cout << "\nMeasure results:\n";
+                    for (const auto& r : results) {
+                        if (!r.failed) {
+                            std::cout << "  " << r.name << " = " << r.value;
+                            if (r.time != 0.0) std::cout << " at time = " << r.time;
+                            std::cout << "\n";
+                        } else {
+                            std::cout << "  " << r.name << " = FAILED ("
+                                      << r.message << ")\n";
+                        }
+                    }
+                }
+            }
         }
     } else if (!do_op && !do_dc && !do_ac_standalone && !do_ac_sensitivity && !do_noise &&
-           !do_tf && !do_pz && !do_sens) {
-        if (mpi.isMaster()) std::cerr << "No analysis specified in netlist (use .OP, .TRAN, .DC, .AC or .NOISE)" << std::endl;
+           !do_tf && !do_pz && !do_sens && !do_hb) {
+        if (mpi.isMaster()) std::cerr << "No analysis specified in netlist (use .OP, .TRAN, .DC, .AC, .NOISE, .TF, .PZ, .SENS or .HB)" << std::endl;
         return false;
     }
 
@@ -661,7 +717,79 @@ bool simulateNetlist(const std::string& filename, bool use_mpi,
         }
     }
 
-    if (do_ac_sensitivity) {
+    if (do_hb) {
+        HBAnalysis hb(circuit);
+        hb.setFundamental(params.hb_frequency);
+        hb.setHarmonics(params.hb_nharmonics);
+        hb.setVerbose(mpi.isMaster());
+
+        const HBResult result = hb.run(use_mpi);
+        if (mpi.isMaster()) {
+            if (!result.success) {
+                std::cerr << "Harmonic balance failed: " << result.message
+                          << std::endl;
+            } else {
+                std::cout << "\nHarmonic balance completed: " << result.message
+                          << std::endl;
+                // The magnitude and the phase of every node voltage, per
+                // harmonic.
+                const auto& labels = nodeLabels(circuit);
+                for (size_t k = 0; k < result.harmonics.size(); ++k) {
+                    std::cout << "  harmonic " << k << " ("
+                              << (k * result.fundamental) << " Hz):" << std::endl;
+                    for (size_t i = 0; i < labels.size(); ++i) {
+                        int row = 0;
+                        for (const auto& n : circuit.getNodes()) {
+                            if (n->isGround()) continue;
+                            if (row == static_cast<int>(i)) {
+                                const std::complex<double> v =
+                                    result.harmonics[k][static_cast<size_t>(row)];
+                                std::cout << "    " << labels[i] << " = "
+                                          << std::abs(v) << " ∠ "
+                                          << (std::arg(v) * 180.0 / 3.14159265358979323846)
+                                          << " deg" << std::endl;
+                                break;
+                            }
+                            ++row;
+                        }
+                    }
+                }
+                // Data export: one row per harmonic, the magnitude and the
+                // phase of every node voltage.
+                if (!csv_path.empty()) {
+                    std::ofstream csv;
+                    csv.open(csv_path);
+                    if (csv.is_open()) {
+                        csv.precision(17);
+                        csv << "harmonic,frequency_hz";
+                        for (const auto& l : labels) {
+                            csv << "," << l << "_mag," << l << "_phase_deg";
+                        }
+                        csv << "\n";
+                        for (size_t k = 0; k < result.harmonics.size(); ++k) {
+                            csv << k << "," << (k * result.fundamental);
+                            int row = 0;
+                            for (const auto& n : circuit.getNodes()) {
+                                if (n->isGround()) continue;
+                                const std::complex<double> v =
+                                    result.harmonics[k][static_cast<size_t>(row)];
+                                csv << "," << std::abs(v) << ","
+                                    << (std::arg(v) * 180.0 /
+                                        3.14159265358979323846);
+                                ++row;
+                            }
+                            csv << "\n";
+                        }
+                        csv.close();
+                        std::cout << "\n[e-XSpice] Dados salvos em: " << csv_path
+                                  << "\n";
+                    } else {
+                        std::cerr << "Erro ao criar o arquivo " << csv_path << "\n";
+                    }
+                }
+            }
+        }
+    } else if (do_ac_sensitivity) {
         auto variationOf = [](const std::string& v) {
             return (v == "DEC") ? ACVariation::DEC
                  : (v == "OCT") ? ACVariation::OCT

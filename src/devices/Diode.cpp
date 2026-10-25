@@ -221,7 +221,7 @@ double Diode::limitedJunctionVoltage(const DaeSolution& x) const {
     const double vd_raw = vd;
     const DiodeThermal& t = *thermal_;
     limiting_active_ = false;
-    if (!first_solve_) {
+    if (!first_solve_ && limiting_enabled_) {
         if (model_->BVGiven && vd < min(0.0, -model_->BV + 10.0 * t.vteBRK)) {
             const double vdtmp = -(model_->BV + vd);
             const double vdtmp_old = -(vd_prev_ + model_->BV);

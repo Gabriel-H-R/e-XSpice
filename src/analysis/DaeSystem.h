@@ -267,6 +267,35 @@ public:
     void refreshLinearization(bool include_gmin = false);
 
     /**
+     * @brief Evaluates the devices at an ARBITRARY solution and time.
+     *
+     * The harmonic balance analysis evaluates the devices at the phase
+     * points of a period, with solutions that are NOT the engine's current
+     * one: it needs F, Q and B at (x(t_n), t_n). The time-domain paths
+     * never need that (they always work on x_), so this is the single
+     * entry point for it.
+     *
+     * @param x   the solution to evaluate at
+     * @param time the time to evaluate at
+     * @param F   static residual (output)
+     * @param Q   charge/flux (output)
+     * @param B   independent sources (output)
+     */
+    void evaluateAt(const DaeSolution& x, double time,
+                    std::vector<double>& F, std::vector<double>& Q,
+                    std::vector<double>& B) const;
+
+    /**
+     * @brief Re-assembles dF/dx and dQ/dx at an ARBITRARY solution and time.
+     *
+     * The result lands in jacobianF() / jacobianQ() (the same fixed
+     * pattern), so the caller can read the values per pattern entry — that
+     * is what the harmonic balance analysis needs (the DFT of the
+     * time-domain Jacobian).
+     */
+    void evaluateJacobiansAt(const DaeSolution& x, double time);
+
+    /**
      * @brief Lightweight linear-solve statistics (performance transparency).
      */    struct SolveStats {
         long long linearSolves = 0;   // total J·dx systems
@@ -325,7 +354,12 @@ private:
 
     // helpers
     void assembleVectors(double time, double q_coeff);
+    void assembleVectorsAt(const DaeSolution& sol, double time, double q_coeff,
+                           std::vector<double>& F, std::vector<double>& Q,
+                           std::vector<double>& B) const;
     void assembleJacobians(double time, double q_coeff);
+    void assembleJacobiansAt(const DaeSolution& sol, double time,
+                             double q_coeff);
     void buildRHS(double q_coeff, bool use_history);
     bool checkUpdateConverged(const std::vector<double>& x_new) const;
     bool checkResidualConverged(double q_coeff) const;

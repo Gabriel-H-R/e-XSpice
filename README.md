@@ -188,6 +188,54 @@ This project explores the intersection of numerical analysis, sparse matrix comp
       step). `tests/test_sens.cpp` checks them, plus the adjoint against a
       dense pivoted reference on a circuit whose pivot-safe ordering is not
       the identity.
+  - **Harmonic Balance (`.HB`)** — the steady-state periodic response of a
+    (nonlinear) circuit, in the frequency domain
+    (`src/analysis/HBAnalysis.{h,cpp}`):
+    ```
+    .HB <fundamental frequency> [number of harmonics]
+    .OPTIONS HBINT NUMFREQ=<n>          (the Xyce spelling of the same)
+    ```
+    - **one formulation, the same device contract.** The unknowns are the
+      Fourier coefficients `X_k` of the MNA solution, and the equations are
+      the Fourier coefficients of the residual:
+      ```
+      R_k = F_k + j·k·ω·Q_k − B_k = 0
+      ```
+      The devices are evaluated at the phase points of one period
+      (`x(t_n) = Σ_m X_m·e^{jmωt_n}`) and the result is transformed back
+      with a DFT. The Jacobian is the CONVOLUTION of the time-domain Jacobian
+      with the DFT — the per-entry DFT of `dF/dx` is computed ONCE per
+      Newton iteration and the blocks are read off it, so the cost is
+      `O(nnz·N·K)` instead of the `O(nnz·N·K²)` a direct accumulation
+      would cost.
+    - **device-agnostic**: the HB reuses the very same device contract as the
+      transient and the AC analyses (F, Q, B and the two Jacobians), so every
+      device that works in the time domain works here — no per-device HB path
+      and no device-specific restriction list.
+    - the Newton limiting (PNJLIM) is a convergence aid of the time-domain
+      solver and it CHANGES the residual, so the HB turns it off (Xyce has the
+      same switch, `.OPTIONS HBINT VOLTLIM`).
+    - **the initial guess does not need a transient run**: the operating point
+      gives the DC harmonic and the AC solution at the fundamental gives the
+      first one (Xyce's default is a full transient-assisted run, which costs
+      a whole transient simulation just to seed the Newton). The step is
+      damped when the plain Newton step overshoots, which is what keeps the
+      iteration stable on a strongly nonlinear circuit.
+    - the harmonic system is assembled on the DAE's FIXED sparsity pattern,
+      so the symbolic factorization runs once and every Newton iteration only
+      refills the values. The pivot-safe ordering is decided once, from the
+      first matrix that is assembled.
+    - the source is driven by its `AC` phasor when it has one (the
+      frequency-domain convention) and by its time-domain waveform otherwise.
+    - **limitations, documented and not silent**: single tone (the multi-tone
+      case needs a non-commensurate sampling grid), and the Newton solve is a
+      dense block solve, so the reachable problem size is the one a direct
+      solver can take — the Krylov alternative for large systems is the
+      natural next step.
+    - verified two ways: against the AC analysis (a linear circuit must
+      reproduce it exactly, and the higher harmonics must vanish) and against
+      the TRANSIENT analysis (the harmonic balance spectrum must match the
+      Fourier coefficients of the transient steady state).
 - **Circuit temperature (`.TEMP <celsius>`, also `.OPTIONS TEMP=`):** re-scales
   every model card that did not pin its own `TEMP=` (SPICE precedence:
   instance > card > circuit) and refreshes the devices that precompute
@@ -782,6 +830,17 @@ which the CTest suite checks (`AC_Netlist_MPI`, `AC_Netlist_FreqPar`).
   - [x] **Pole-zero analysis (`.PZ`)** - real poles and zeros of the
         small-signal transfer function via grid search + bisection, DC gain,
         shared operating point and linearization
+  - [x] **Harmonic balance (`.HB`)** - the steady-state periodic response in
+        the frequency domain: the Fourier coefficients of the MNA solution are
+        the unknowns, the devices are evaluated at the phase points of one
+        period and transformed back with a DFT, the Newton step is damped, and
+        the initial guess comes from the operating point plus the AC solution
+        at the fundamental (no transient-assisted run). Device-agnostic (the
+        same DAE contract as the transient and the AC analyses). Single tone;
+        the dense block solve limits the problem size
+  - [ ] HB extras: multi-tone (the intermodulation products need a
+        non-commensurate sampling grid), a Krylov solve of the expanded
+        harmonic system for large problems, `.PRINT HB` column selection
   - [ ] Preconditioning (ILU)
   - [ ] Graph partitioning (METIS) - and, for the AC path, a row-distributed
         complex LU with coordinated pivoting for million-unknown systems

@@ -56,6 +56,14 @@ if(DEFINED EXPECT_ROWS)
     endif()
 endif()
 
+if(DEFINED EXPECT_CONTENT_REGEX)
+    # A regular expression the CSV CONTENT must match (a value check).
+    string(REGEX MATCH "${EXPECT_CONTENT_REGEX}" _m "${_content}")
+    if(NOT _m)
+        message(FATAL_ERROR "CSV content does not match '${EXPECT_CONTENT_REGEX}':\n${_content}")
+    endif()
+endif()
+
 message(STATUS "CSV ok: ${NETLIST} (${_rows} lines, header '${CMAKE_MATCH_1}')")
 
 if(DEFINED MPIEXEC AND MPIEXEC)

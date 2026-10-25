@@ -210,7 +210,7 @@ void Bjt::limitedJunctionVoltages(const DaeSolution& x,
     double vbc = p_ * (vb - vc);
 
     limiting_active_ = false;
-    if (allow_limiting && !first_solve_) {
+    if (allow_limiting && !first_solve_ && limiting_enabled_) {
         const double nvbe = pnjlim(vbe, vbe_prev_, thermal_->vte,
                                    thermal_->beVcrit);
         if (nvbe != vbe) { vbe = nvbe; limiting_active_ = true; }
@@ -671,8 +671,8 @@ void Bjt::loadChargeHistory(const StateStore& store, double q_coeff,
         const int rs = rowSub();
         const double qcs = q_coeff * store.deviceQ(state_index_, 2) +
                            qdot_coeff * store.deviceQDot(state_index_, 2);
-        if (rs >= 0) rhs[rs] += p_ * qcs_;
-        if (ci >= 0) rhs[ci] -= p_ * qcs_;
+        if (rs >= 0) rhs[rs] += p_ * qcs;
+        if (ci >= 0) rhs[ci] -= p_ * qcs;
     }
 }
 

@@ -2,16 +2,20 @@ cmake_minimum_required(VERSION 3.15)
 
 project(e-XSpice
     VERSION 1.0.0
-    LANGUAGES CXX
+    LANGUAGES CXX C
 )
 
 # ============================================================
-# C++ STANDARD
+# C++ / C STANDARD
 # ============================================================
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+set(CMAKE_C_STANDARD 99)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
 
 
 # ============================================================
@@ -70,6 +74,8 @@ include_directories(
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/models/core_models
+    ${CMAKE_SOURCE_DIR}/src/models/external          # SPICE shim headers
+    ${CMAKE_SOURCE_DIR}/src/models/bsim4/code        # Berkeley BSIM4 headers
     ${CMAKE_SOURCE_DIR}/libs/symbolic
 )
 
@@ -106,6 +112,15 @@ file(GLOB_RECURSE SYMBOLIC_SOURCES
     "${CMAKE_SOURCE_DIR}/libs/symbolic/*.cpp"
 )
 
+# Berkeley BSIM4 C sources (compiled as C, verbatim, no changes).
+# Only the load/temp functions are needed; setup/getic/destroy and the
+# parameter tables (b4.c) require the full SPICE environment and are
+# handled manually by BSim4Adapter.
+set(BERKELEY_BSIM4_SOURCES
+    "${CMAKE_SOURCE_DIR}/src/models/bsim4/code/b4ld.c"
+    "${CMAKE_SOURCE_DIR}/src/models/bsim4/code/b4temp.c"
+)
+
 
 # ============================================================
 # STATIC LIBRARY
@@ -120,6 +135,7 @@ add_library(e-XSpice_lib STATIC
     ${PARALLEL_SOURCES}
     ${MODEL_SOURCES}
     ${SYMBOLIC_SOURCES}
+    ${BERKELEY_BSIM4_SOURCES}
 
 )
 
@@ -167,14 +183,13 @@ target_link_libraries(e-XSpice
 
 
 # ============================================================
-# BSIM4 PHYSICS KERNEL
+# BSIM4 PHYSICS KERNEL (Berkeley C, now always available)
 # ============================================================
-# reference (default): pure-C++ subset, always builds, no extra headers.
-# berkeley: upstream src/models/bsim4/code (b4ld.c/b4temp.c) via the
-# adapter skeleton in src/models/external/. Requires SPICE3 shim headers
-# (spice.h, cktdefs.h, devdefs.h — absent), so OFF by default.
+# The SPICE shim headers (src/models/external/SpiceHeaders.h) provide the
+# minimal type declarations needed to compile the Berkeley BSIM4 C code
+# unchanged. The BSim4Adapter wraps BSIM4load() into e-XSpice's DAE contract.
 
-option(EXSPICE_USE_BERKELEY_BSIM4 "Compile Berkeley BSIM4 C kernel (requires shim headers)" OFF)
+option(EXSPICE_USE_BERKELEY_BSIM4 "Use Berkeley BSIM4 C kernel via BSim4Adapter" ON)
 
 if(EXSPICE_USE_BERKELEY_BSIM4)
     add_compile_definitions(EXSPICE_USE_BERKELEY_BSIM4)
@@ -202,10 +217,11 @@ endif()
 
 message(STATUS "")
 message(STATUS "========== e-XSpice Configuration ==========")
-message(STATUS "C++ Standard : C++${CMAKE_CXX_STANDARD}")
-message(STATUS "Build Type   : ${CMAKE_BUILD_TYPE}")
-message(STATUS "MPI          : ${MPI_FOUND}")
-message(STATUS "OpenMP       : ${OpenMP_FOUND}")
-message(STATUS "BSIM4 kernel : ${EXSPICE_USE_BERKELEY_BSIM4} (ON=Berkeley C, OFF=reference C++)")
+message(STATUS "C++ Standard  : C++${CMAKE_CXX_STANDARD}")
+message(STATUS "C Standard    : C${CMAKE_C_STANDARD}")
+message(STATUS "Build Type    : ${CMAKE_BUILD_TYPE}")
+message(STATUS "MPI           : ${MPI_FOUND}")
+message(STATUS "OpenMP        : ${OpenMP_FOUND}")
+message(STATUS "BSIM4 kernel  : ${EXSPICE_USE_BERKELEY_BSIM4} (ON=Berkeley C)")
 message(STATUS "============================================")
 message(STATUS "")
