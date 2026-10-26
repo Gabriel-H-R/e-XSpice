@@ -236,7 +236,7 @@ private:
 
     const MosfetThermal* thermal_ = nullptr;
     MosfetThermal ownThermal_;
-    MosfetBSIM4Thermal ownThermalBSIM4_;
+    mutable MosfetBSIM4Thermal ownThermalBSIM4_;
 
     // Polarity multiplier: +1 NMOS, −1 PMOS.
     int p_ = 1;

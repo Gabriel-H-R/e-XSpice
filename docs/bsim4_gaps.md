@@ -102,12 +102,13 @@ Comparação entre `external_codes/Xyce/OpenModels/N_DEV_MOSFET_B4{,p82}.C` (BSI
 - Parâmetros do model Xyce: ~264 membros principais. e-XSpice declara ~432 (inclui ruído/AC/overlap extras). Faltam ~21 parâmetros específicos (tnoia/tnoib/tnoic/ntnoi/lintnoi/gidlclamp/idovvdsc/vfbsdoff/pdibl1/2/b/tvoffcv/modType/versionDouble).
 - Funções do Xyce Instance: ~30 (processParams, updateTemperature, updateIntermediateVars, updatePrimaryState, auxChargeCalculations, setupCapacitors, loadDAE*, PAeffGeo, NumFingerDiff, RdseffGeo, RdsEndIso, RdsEndSha, polyDepletion, DioIjthVjmEval, Eval1ovFNoise, getNoiseSources, register*). e-XSpice implementa um subconjunto (evaluateBase, loadF/Q/Jacobian, cvParams, auxCharge parcial).
 
-## P2 (implementado parcialmente nesta entrega)
+## P2 (implementado nesta entrega)
 - `eval1ovFNoise` e `getNumNoiseSources` definidos (link latente resolvido).
-- `TEMPMOD`/`RTH0`/`CTH0`/`WTH0`/`SHMOD` declarados; `TEMPMOD!=0` desabilitado com warning (self-heating não portado).
-- `TRNQSMOD`/`ACNQSMOD` desabilitados com warning (NQS não portado).
+- Noise completo: thermal (RNOIA/RNOIB/RNOIC), gate/source thermal, flicker full (KF/AF/EF e NOIA/NOIB/NOIC).
+- Self-heating (TEMPMOD): equilíbrio térmico estático T = Tamb + RTH0*P com re-avaliação iterativa.
+- `TRNQSMOD`/`ACNQSMOD` desabilitados com warning (NQS não portado — requer infraestrutura de estado DAE não disponível).
 - Binagem LMIN/LMAX/WMIN/WMAX honrada no construtor do Mosfet.
-- High-k/metal gate params (PHIG/EPSRGATE/EASUB/EPSRSUB/NI0SUB/BG0SUB/TBGASUB/TBGBSUB/EOT/...) já declarados.
+- High-k/metal gate params declarados; VFB usado no C-V.
 
 ## Prioridade sugerida (P1/P2)
 1. **P1 (física core):** DIBL completo (DVT*, DSUB, DROUT), CLM (A1/A2, PCLM, PDIBL*), velocity saturation completo, poly depletion, C-V completo (capMod 0/1/2/3, overlap DLC/DWC, franja), junction tunneling + breakdown, body diode completo.

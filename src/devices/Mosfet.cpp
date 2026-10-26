@@ -186,11 +186,7 @@ Mosfet::Mosfet(const std::string& name,
                 getName().c_str());
             rbodymod = 1;
         }
-        if (m.TEMPMOD != 0) {
-            std::fprintf(stderr,
-                "Warning: %s TEMPMOD=%d (self-heating) is not ported; using TEMPMOD=0.\n",
-                getName().c_str(), m.TEMPMOD);
-        }
+        (void)0;
         if (m.TRNQSMOD != 0) {
             std::fprintf(stderr,
                 "Warning: %s TRNQSMOD=%d (transient NQS) is not ported; using TRNQSMOD=0.\n",
@@ -687,6 +683,40 @@ void Mosfet::loadF(const DaeSolution& x, double time,
         stamp2(gRbpb_, re[3], ri[3]);
         stamp2(gRbps_, re[3], re[2]);
         stamp2(gRbpd_, re[3], re[0]);
+
+        // Self-heating (TEMPMOD): static thermal equilibrium.  When enabled
+        // and RTH0 > 0, recompute the device temperature from the dissipated
+        // power T = Tamb + RTH0*P and re-evaluate until convergence.
+        if (bsim4Model_ && bsim4Model_->TEMPMOD != 0 &&
+            bsim4Model_->RTH0 > 0.0) {
+            const MosfetBSIM4Thermal& amb = (inst_.TEMPGiven)
+                ? ownThermalBSIM4_ : bsim4Model_->thermal();
+            const double Tamb = (inst_.TEMPGiven) ? (inst_.TEMP + inst_.DTEMP)
+                : 0.0;
+            // ambient temperature from model thermal vt: T = vt * q/k
+            const double TambK = (amb.vt > 0.0) ? (amb.vt / Const::KoverQ) : 300.15;
+            const double Rth = bsim4Model_->RTH0;
+            for (int it = 0; it < 5; ++it) {
+                const double vd = x.data()[re[0]] - x.data()[re[2]];
+                const double P = std::fabs(id_ * vd);
+                const double Tnew = (Tamb > 0 ? Tamb : TambK) + Rth * P;
+                ownThermalBSIM4_ = bsim4Model_->computeThermal(Tnew);
+                bsim4Device_->setThermal(&ownThermalBSIM4_);
+                bsim4Device_->evaluate(bsim4Device_->vgsLim(),
+                                       bsim4Device_->vdsLim(),
+                                       bsim4Device_->vbsLim());
+                // update cached currents
+                id_ = bsim4Device_->getDrainCurrent();
+                is_ = bsim4Device_->getSourceCurrent();
+                ib_ = bsim4Device_->getBulkCurrent();
+                gm_ = bsim4Device_->getGm();
+                qg_ = bsim4Device_->getChargeG();
+                qd_ = bsim4Device_->getChargeD();
+                qb_ = bsim4Device_->getChargeB();
+                if (std::fabs(Tnew - (ownThermalBSIM4_.vt / Const::KoverQ)) < 1e-3) break;
+            }
+        }
+
         pullBSIM4();
         bsim4Device_->commitLimited();
         first_solve_ = false;
@@ -1060,18 +1090,46 @@ double Mosfet::getPower() const {
 void Mosfet::loadNoiseSources(const NoiseContext& ctx,
                               std::vector<NoiseSource>& out) const {
     const double gm = std::fabs(gm_);
-    // Thermal noise (drain-source)
+    const double kT = ctx.boltzmann * ctx.temperature;
+    // Thermal noise (drain-source) with RNOIA coefficient.
     if (gm > 0.0) {
         NoiseSource s;
         s.label = "thermal";
         s.pos = rowOf(nodes_[0]);
         s.neg = rowOf(nodes_[2]);
-        s.psd_a2 = (8.0 / 3.0) * ctx.boltzmann * ctx.temperature * gm;
+        double rnoia = 1.0;
+        if (isBSIM4() && bsim4Model_) rnoia = bsim4Model_->RNOIA;
+        s.psd_a2 = rnoia * (4.0 * kT * gm * (2.0 / 3.0));
         s.f_exponent = 0.0;
         out.push_back(s);
     }
 
-    // Flicker (1/f) noise for BSIM4
+    // Gate thermal noise (BSIM4 RNOIC) for BSIM4.
+    if (isBSIM4() && bsim4Model_) {
+        const double RNOIC = bsim4Model_->RNOIC;
+        if (RNOIC > 0.0 && gm > 0.0) {
+            NoiseSource sg;
+            sg.label = "gate_thermal";
+            sg.pos = rowOf(nodes_[1]);
+            sg.neg = rowOf(nodes_[2]);
+            sg.psd_a2 = RNOIC * 4.0 * kT * gm;
+            sg.f_exponent = 0.0;
+            out.push_back(sg);
+        }
+        // Source thermal noise (RNOIB).
+        const double RNOIB = bsim4Model_->RNOIB;
+        if (RNOIB > 0.0 && gm > 0.0) {
+            NoiseSource ss;
+            ss.label = "source_thermal";
+            ss.pos = rowOf(nodes_[2]);
+            ss.neg = rowOf(nodes_[3]);
+            ss.psd_a2 = RNOIB * 4.0 * kT * gm;
+            ss.f_exponent = 0.0;
+            out.push_back(ss);
+        }
+    }
+
+    // Flicker (1/f) noise
     if (isBSIM4() && bsim4Model_) {
         double Id = std::fabs(getDrainCurrent());
         if (Id > 0.0) {
@@ -1080,24 +1138,21 @@ void Mosfet::loadNoiseSources(const NoiseContext& ctx,
             f.pos = rowOf(nodes_[0]);
             f.neg = rowOf(nodes_[2]);
             if (bsim4Model_->FNOIMOD == 0) {
-                // Simple: KF * Id^AF / (f^EF * Cox * L * W)
                 double psd = bsim4Model_->KF * std::pow(Id, bsim4Model_->AF);
                 f.psd_a2 = psd;
                 f.f_exponent = bsim4Model_->EF;
             } else {
-                // BSIM4 flicker noise (NOIA/NOIB/NOIC)
                 double Leff = inst_.L - 2.0 * bsim4Model_->LD;
                 if (Leff <= 0) Leff = 1e-9;
-                double Cox = 3.9 * 8.854e-12 / bsim4Model_->TOX;
+                double Cox = bsim4Model_->EPSROX * 8.854e-12 / (bsim4Model_->TOXE > 0 ? bsim4Model_->TOXE : 1e-9);
                 double Nl = Cox * (vgs_cached_ - vth_cached_) / 1.60219e-19;
                 if (Nl < 0) Nl = 0;
                 double nstar = 1e12;
                 double T1 = bsim4Model_->NOIA + bsim4Model_->NOIB / (Nl + nstar)
                           + bsim4Model_->NOIC / ((Nl + nstar) * (Nl + nstar));
-                double psd = 1.38065e-23 * ctx.temperature * Id * Id / (Cox * Leff * inst_.W * inst_.M)
-                           * T1;
+                double psd = kT * Id * Id / (Cox * Leff * inst_.W * inst_.M) * T1;
                 f.psd_a2 = psd;
-                f.f_exponent = 1.0; // 1/f
+                f.f_exponent = 1.0;
             }
             out.push_back(f);
         }
