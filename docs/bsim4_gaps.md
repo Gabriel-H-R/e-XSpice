@@ -102,6 +102,13 @@ Comparação entre `external_codes/Xyce/OpenModels/N_DEV_MOSFET_B4{,p82}.C` (BSI
 - Parâmetros do model Xyce: ~264 membros principais. e-XSpice declara ~432 (inclui ruído/AC/overlap extras). Faltam ~21 parâmetros específicos (tnoia/tnoib/tnoic/ntnoi/lintnoi/gidlclamp/idovvdsc/vfbsdoff/pdibl1/2/b/tvoffcv/modType/versionDouble).
 - Funções do Xyce Instance: ~30 (processParams, updateTemperature, updateIntermediateVars, updatePrimaryState, auxChargeCalculations, setupCapacitors, loadDAE*, PAeffGeo, NumFingerDiff, RdseffGeo, RdsEndIso, RdsEndSha, polyDepletion, DioIjthVjmEval, Eval1ovFNoise, getNoiseSources, register*). e-XSpice implementa um subconjunto (evaluateBase, loadF/Q/Jacobian, cvParams, auxCharge parcial).
 
+## P2 (implementado parcialmente nesta entrega)
+- `eval1ovFNoise` e `getNumNoiseSources` definidos (link latente resolvido).
+- `TEMPMOD`/`RTH0`/`CTH0`/`WTH0`/`SHMOD` declarados; `TEMPMOD!=0` desabilitado com warning (self-heating não portado).
+- `TRNQSMOD`/`ACNQSMOD` desabilitados com warning (NQS não portado).
+- Binagem LMIN/LMAX/WMIN/WMAX honrada no construtor do Mosfet.
+- High-k/metal gate params (PHIG/EPSRGATE/EASUB/EPSRSUB/NI0SUB/BG0SUB/TBGASUB/TBGBSUB/EOT/...) já declarados.
+
 ## Prioridade sugerida (P1/P2)
 1. **P1 (física core):** DIBL completo (DVT*, DSUB, DROUT), CLM (A1/A2, PCLM, PDIBL*), velocity saturation completo, poly depletion, C-V completo (capMod 0/1/2/3, overlap DLC/DWC, franja), junction tunneling + breakdown, body diode completo.
 2. **P1 (geometria):** PAeffGeo casos 1/2/3, RdseffGeo completo, RdsEndIso/Sha, MIN, GEOMOD.

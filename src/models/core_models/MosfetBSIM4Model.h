@@ -567,6 +567,10 @@ public:
     int MTRLMOD = 0;
     int MTRLCOMPATMOD = 0;
     int TEMPMOD = 0;
+    double RTH0 = 0.0;
+    double CTH0 = 0.0;
+    double WTH0 = 0.0;
+    int SHMOD = 0;
     int GIDLMOD = 0;
     int PARAMCHK = 1;
     int BINUNIT = 1;

@@ -488,6 +488,10 @@ MosfetBSIM4Model::MosfetBSIM4Model(std::string name, bool nmos)
         makeIntParam("MTRLMOD", &MosfetBSIM4Model::MTRLMOD, "Xyce B4.C:4792"),
         makeIntParam("MTRLCOMPATMOD", &MosfetBSIM4Model::MTRLCOMPATMOD, "Xyce B4.C:4797"),
         makeIntParam("TEMPMOD", &MosfetBSIM4Model::TEMPMOD, "Xyce B4.C:4813"),
+        makeParam("RTH0", &MosfetBSIM4Model::RTH0, "thermal resistance (self-heating)"),
+        makeParam("CTH0", &MosfetBSIM4Model::CTH0, "thermal capacitance (self-heating)"),
+        makeParam("WTH0", &MosfetBSIM4Model::WTH0, "thermal width (self-heating)"),
+        makeIntParam("SHMOD", &MosfetBSIM4Model::SHMOD, "self-heating model"),
         makeIntParam("GIDLMOD", &MosfetBSIM4Model::GIDLMOD, "Xyce B4.C:4818"),
         makeIntParam("PARAMCHK", &MosfetBSIM4Model::PARAMCHK, "Xyce B4.C:4824"),
         makeIntParam("BINUNIT", &MosfetBSIM4Model::BINUNIT, "Xyce B4.C:4829"),
@@ -1182,6 +1186,10 @@ RCP<DeviceModel> MosfetBSIM4Model::fromCard(const std::string& name,
     m->MTRLMOD = static_cast<int>(card.get("MTRLMOD", m->MTRLMOD));
     m->MTRLCOMPATMOD = static_cast<int>(card.get("MTRLCOMPATMOD", m->MTRLCOMPATMOD));
     m->TEMPMOD = static_cast<int>(card.get("TEMPMOD", m->TEMPMOD));
+    m->RTH0 = card.get("RTH0", m->RTH0);
+    m->CTH0 = card.get("CTH0", m->CTH0);
+    m->WTH0 = card.get("WTH0", m->WTH0);
+    m->SHMOD = static_cast<int>(card.get("SHMOD", m->SHMOD));
     m->GIDLMOD = static_cast<int>(card.get("GIDLMOD", m->GIDLMOD));
     m->PARAMCHK = static_cast<int>(card.get("PARAMCHK", m->PARAMCHK));
     m->BINUNIT = static_cast<int>(card.get("BINUNIT", m->BINUNIT));

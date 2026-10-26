@@ -1463,6 +1463,31 @@ void MosfetBSIM4Device::evaluateBase(double vgs, double vds, double vbs, bool pr
     (void)0;
 }
 
+double MosfetBSIM4Device::eval1ovFNoise(double vds, double freq, double temp) const {
+    // 1/f noise PSD (simplified).  Returns 0 when not applicable.
+    if (freq <= 0.0) return 0.0;
+    const double gm = std::fabs(gm_);
+    if (gm <= 0.0) return 0.0;
+    const double kT = 1.380649e-23 * (temp > 0.0 ? temp : 300.15);
+    // Use model NOIA/NOIB/NOIC if available.
+    const MosfetBSIM4Model& m = *model_;
+    const double Leff = L_ - 2.0 * m.LD;
+    const double leff = (Leff > 0.0) ? Leff : 1e-9;
+    const double Cox = m.EPSROX * 8.854e-12 / (m.TOXE > 0.0 ? m.TOXE : 1e-9);
+    const double Nl = Cox * (vgs_cached_ - vth_cached_) / 1.60219e-19;
+    const double nstar = 1e12;
+    const double T1 = m.NOIA + m.NOIB / (Nl + nstar)
+                    + m.NOIC / ((Nl + nstar) * (Nl + nstar));
+    const double psd = kT * std::fabs(id_) * std::fabs(id_) / (Cox * leff * W_ * M_)
+                     * T1 / freq;
+    (void)vds;
+    return psd;
+}
+
+int MosfetBSIM4Device::getNumNoiseSources() const {
+    return 2;  // thermal + flicker
+}
+
 void MosfetBSIM4Device::evaluate(double vgs, double vds, double vbs) {
     // Charge Jacobian dQ/dV: central differences of the terminal charges of
     // the exact charge model (same model, probed at vgs/vds/vbs +- h).

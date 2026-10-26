@@ -186,6 +186,21 @@ Mosfet::Mosfet(const std::string& name,
                 getName().c_str());
             rbodymod = 1;
         }
+        if (m.TEMPMOD != 0) {
+            std::fprintf(stderr,
+                "Warning: %s TEMPMOD=%d (self-heating) is not ported; using TEMPMOD=0.\n",
+                getName().c_str(), m.TEMPMOD);
+        }
+        if (m.TRNQSMOD != 0) {
+            std::fprintf(stderr,
+                "Warning: %s TRNQSMOD=%d (transient NQS) is not ported; using TRNQSMOD=0.\n",
+                getName().c_str(), m.TRNQSMOD);
+        }
+        if (m.ACNQSMOD != 0) {
+            std::fprintf(stderr,
+                "Warning: %s ACNQSMOD=%d (AC NQS) is not ported; using ACNQSMOD=0.\n",
+                getName().c_str(), m.ACNQSMOD);
+        }
         if (rbodymod == 1) {
             offB_ = numInternal_++;
             auto Rof = [&](double instVal, double modelVal) {
