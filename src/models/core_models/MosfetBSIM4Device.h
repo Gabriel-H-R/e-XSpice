@@ -47,10 +47,18 @@ class MosfetBSIM4Device : public RefCounted {
 public:
     /**
      * @param model  Shared BSIM4 model card (never null)
-     * @param inst   Per-instance parameters (W, L, M, etc.)
+     * @param W      total device width (m)
+     * @param L      drawn channel length (m)
+     * @param M      number of parallel devices (SPICE "M"); scales every
+     *               terminal current and charge
+     * @param NF     number of fingers (SPICE "NF"); only affects the
+     *               junction/perimeter geometry, never the channel area
+     * @param AD/AS  drain/source diffusion area (m^2), 0 = derive from GEOMOD
+     * @param PD/PS  drain/source perimeter (m), 0 = derive from GEOMOD
      */
     MosfetBSIM4Device(RCP<const MosfetBSIM4Model> model,
-                      double W, double L, double M, double AREA,
+                      double W, double L, double M, double NF,
+                      double AD, double AS, double PD, double PS,
                       double SA = 0.0, double SB = 0.0, double SD = 0.0,
                       double SCA = 0.0, double SCB = 0.0, double SCC = 0.0,
                       double SC = 0.0);
@@ -156,7 +164,11 @@ public:
 
 private:
     RCP<const MosfetBSIM4Model> model_;
-    double W_ = 0.0, L_ = 0.0, M_ = 1.0, AREA_ = 1.0;
+    double W_ = 0.0, L_ = 0.0;
+    double M_ = 1.0;    // number of parallel devices (SPICE "M")
+    double NF_ = 1.0;   // number of fingers (SPICE "NF")
+    double AD_ = 0.0, AS_ = 0.0;  // diffusion areas (m^2)
+    double PD_ = 0.0, PS_ = 0.0;  // diffusion perimeters (m)
     double SA_ = 0.0, SB_ = 0.0, SD_ = 0.0;
     double SCA_ = 0.0, SCB_ = 0.0, SCC_ = 0.0, SC_ = 0.0;
 
@@ -213,6 +225,15 @@ private:
     // Operating point and terminal charges at one bias (no Jacobian). The
     // flag suppresses the diagnostic dump for the probing evaluations.
     void evaluateBase(double vgs, double vds, double vbs, bool probe);
+    static int numFingerDiff(double nf, int minSD, double& nuIntD, double& nuEndD,
+                             double& nuIntS, double& nuEndS);
+    static int paEffGeo(double nf, int geo, int minSD, double weffCJ,
+                        double DMCG, double DMCI, double DMDG,
+                        double& Ps, double& Pd, double& As, double& Ad);
+    // Poly-silicon gate depletion (BSIM4 polyDepletion, N_DEV_MOSFET_B4.C:8819).
+    static void polyDepletion(double phi, double ngate, double epsgate,
+                              double coxe, double Vgs_arg, double& Vgs_eff,
+                              double& dVgs_eff_dVg);
 };
 
 } // namespace e_XSpice

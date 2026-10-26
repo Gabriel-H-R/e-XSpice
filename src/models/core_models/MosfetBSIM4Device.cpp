@@ -26,12 +26,18 @@ bool MosfetBSIM4Device::debug_ =
 static constexpr double EpsOx = 3.9 * 8.854214871e-12;
 
 MosfetBSIM4Device::MosfetBSIM4Device(
-    RCP<const MosfetBSIM4Model> model, double W, double L, double M, double AREA,
+    RCP<const MosfetBSIM4Model> model, double W, double L, double M, double NF,
+    double AD, double AS, double PD, double PS,
     double SA, double SB, double SD,
     double SCA, double SCB, double SCC, double SC)
-    : model_(std::move(model)), W_(W), L_(L), M_(M), AREA_(AREA), SA_(SA), SB_(SB), SD_(SD), SCA_(SCA), SCB_(SCB), SCC_(SCC), SC_(SC) {
+    : model_(std::move(model)), W_(W), L_(L), M_(M), NF_(NF), AD_(AD), AS_(AS),
+      PD_(PD), PS_(PS), SA_(SA), SB_(SB), SD_(SD), SCA_(SCA), SCB_(SCB),
+      SCC_(SCC), SC_(SC) {
     if (!model_) throw std::invalid_argument("BSIM4 device requires a model card");
     if (W_ <= 0.0 || L_ <= 0.0) throw std::invalid_argument("BSIM4 MOSFET W and L must be positive");
+    if (M_ <= 0.0) M_ = 1.0;
+    if (NF_ <= 0.0) NF_ = 1.0;
+    (void)0;
 }
 
 double MosfetBSIM4Device::pnjlim(double vnew, double vold, double vt,
@@ -196,26 +202,14 @@ CvParams cvParams(const MosfetBSIM4Model& m, double W, double L, int dtype,
     c.cdep0 = std::sqrt(kCvQ * c.epssub * m.NDEP * 1.0e6 / 2.0 / c.phi);
     c.ldeb = std::sqrt(c.epssub * vtm0 / (kCvQ * m.NDEP * 1.0e6)) / 3.0;
 
-    // k1/k2: given, or derived from NSUB/NDEP through GAMMA1/GAMMA2.
+    // k1/k2 come from the model card, already resolved by
+    // MosfetBSIM4Model::deriveBodyEffectCoeffs() (K1/K2 given, or derived
+    // from GAMMA1/GAMMA2).  Doing it here as well used to give the C-V block
+    // a different body effect than the DC threshold.
     c.vbm = m.VBM;
-    if (m.isGiven("K1") || m.isGiven("K2")) {
-        c.k1 = m.isGiven("K1") ? m.K1 : 0.53;
-        c.k2 = m.isGiven("K2") ? m.K2 : -0.0186;
-    } else {
-        double vbx = m.isGiven("VBX")
-            ? m.VBX : c.phi - 7.7348e-4 * m.NDEP * m.XT * m.XT;
-        if (vbx > 0.0) vbx = -vbx;
-        if (c.vbm > 0.0) c.vbm = -c.vbm;
-        const double gamma1 = m.isGiven("GAMMA1")
-            ? m.GAMMA1 : 5.753e-12 * std::sqrt(m.NDEP) / c.coxe;
-        const double gamma2 = m.isGiven("GAMMA2")
-            ? m.GAMMA2 : 5.753e-12 * std::sqrt(m.NSUB) / c.coxe;
-        const double T0 = gamma1 - gamma2;
-        const double T1 = std::sqrt(c.phi - vbx) - c.sqrtPhi;
-        const double T2 = std::sqrt(c.phi * (c.phi - c.vbm)) - c.phi;
-        c.k2 = T0 * T1 / (2.0 * T2 + c.vbm);
-        c.k1 = gamma2 - 2.0 * c.k2 * std::sqrt(c.phi - c.vbm);
-    }
+    if (c.vbm > 0.0) c.vbm = -c.vbm;
+    c.k1 = m.K1;
+    c.k2 = m.K2;
     c.k1ox = c.k1 * c.toxe / m.TOXM;
     c.k2ox = c.k2 * c.toxe / m.TOXM;
 
@@ -501,40 +495,222 @@ CtmCharges ctmCharges(const CvParams& c, int capMod, int cvchargeMod,
 
 }  // namespace
 
+void MosfetBSIM4Device::polyDepletion(double phi, double ngate, double epsgate,
+                                      double coxe, double Vgs_arg,
+                                      double& Vgs_eff, double& dVgs_eff_dVg) {
+    // Xyce N_DEV_MOSFET_B4.C:8819 (polyDepletion).
+    const double CONSTQ = 1.6021918e-19;
+    const double CONSTEPSSI = 1.03594e-10;
+    if (ngate > 1.0e18 && ngate < 1.0e25 && Vgs_arg > phi && epsgate != 0.0) {
+        const double T1 = 1.0e6 * CONSTQ * epsgate * ngate / (coxe * coxe);
+        const double T8 = Vgs_arg - phi;
+        const double T4 = std::sqrt(1.0 + 2.0 * T8 / T1);
+        const double T2 = 2.0 * T8 / (T4 + 1.0);
+        const double T3 = 0.5 * T2 * T2 / T1;   // Vpoly
+        const double T7 = 1.12 - T3 - 0.05;
+        const double T6 = std::sqrt(T7 * T7 + 0.224);
+        const double T5 = 1.12 - 0.5 * (T7 + T6);
+        Vgs_eff = Vgs_arg - T5;
+        dVgs_eff_dVg = 1.0 - (0.5 - 0.5 / T4) * (1.0 + T7 / T6);
+    } else {
+        Vgs_eff = Vgs_arg;
+        dVgs_eff_dVg = 1.0;
+    }
+    (void)phi; (void)CONSTEPSSI;
+}
+
+int MosfetBSIM4Device::numFingerDiff(double nf, int minSD, double& nuIntD,
+                                     double& nuEndD, double& nuIntS,
+                                     double& nuEndS) {
+    // Xyce N_DEV_MOSFET_B4.C:8889.
+    int NF = static_cast<int>(nf);
+    if ((NF % 2) != 0) {
+        nuEndD = nuEndS = 1.0;
+        nuIntD = nuIntS = 2.0 * std::max((nf - 1.0) / 2.0, 0.0);
+    } else {
+        if (minSD == 1) {          // minimize # of source
+            nuEndD = 2.0;
+            nuIntD = 2.0 * std::max(nf / 2.0 - 1.0, 0.0);
+            nuEndS = 0.0;
+            nuIntS = nf;
+        } else {                   // minimize # of drain
+            nuEndD = 0.0;
+            nuIntD = nf;
+            nuEndS = 2.0;
+            nuIntS = 2.0 * std::max(nf / 2.0 - 1.0, 0.0);
+        }
+    }
+    return 0;
+}
+
+int MosfetBSIM4Device::paEffGeo(double nf, int geo, int minSD, double weffCJ,
+                                double DMCG, double DMCI, double DMDG,
+                                double& Ps, double& Pd, double& As,
+                                double& Ad) {
+    // Xyce N_DEV_MOSFET_B4.C:8931.
+    double nuIntD = 0.0, nuEndD = 0.0, nuIntS = 0.0, nuEndS = 0.0;
+    if (geo < 9) numFingerDiff(nf, minSD, nuIntD, nuEndD, nuIntS, nuEndS);
+
+    const double T0 = DMCG + DMCI;
+    const double PSiso = 2.0 * T0 + weffCJ;
+    const double PDiso = PSiso;
+    const double PSsha = 2.0 * DMCG;
+    const double PDsha = PSsha;
+    const double PSmer = 2.0 * DMDG;
+    const double PDmer = PSmer;
+    const double ASiso = T0 * weffCJ;
+    const double ADiso = ASiso;
+    const double ASsha = DMCG * weffCJ;
+    const double ADsha = ASsha;
+    const double ASmer = DMDG * weffCJ;
+    const double ADmer = ASmer;
+
+    switch (geo) {
+        case 0:
+            Ps = nuEndS * PSiso + nuIntS * PSsha;
+            Pd = nuEndD * PDiso + nuIntD * PDsha;
+            As = nuEndS * ASiso + nuIntS * ASsha;
+            Ad = nuEndD * ADiso + nuIntD * ADsha;
+            break;
+        case 1:
+            Ps = nuEndS * PSiso + nuIntS * PSsha;
+            Pd = (nuEndD + nuIntD) * PDsha;
+            As = nuEndS * ASiso + nuIntS * ASsha;
+            Ad = (nuEndD + nuIntD) * ADsha;
+            break;
+        case 2:
+            Ps = (nuEndS + nuIntS) * PSsha;
+            Pd = nuEndD * PDiso + nuIntD * PDsha;
+            As = (nuEndS + nuIntS) * ASsha;
+            Ad = nuEndD * ADiso + nuIntD * ADsha;
+            break;
+        case 3:
+            Ps = (nuEndS + nuIntS) * PSsha;
+            Pd = (nuEndD + nuIntD) * PDsha;
+            As = (nuEndS + nuIntS) * ASsha;
+            Ad = (nuEndD + nuIntD) * ADsha;
+            break;
+        case 4:
+            Ps = nuEndS * PSiso + nuIntS * PSsha;
+            Pd = nuEndD * PDmer + nuIntD * PDsha;
+            As = nuEndS * ASiso + nuIntS * ASsha;
+            Ad = nuEndD * ADmer + nuIntD * ADsha;
+            break;
+        case 5:
+            Ps = (nuEndS + nuIntS) * PSsha;
+            Pd = nuEndD * PDmer + nuIntD * PDsha;
+            As = (nuEndS + nuIntS) * ASsha;
+            Ad = nuEndD * ADmer + nuIntD * ADsha;
+            break;
+        case 6:
+            Ps = nuEndS * PSmer + nuIntS * PSsha;
+            Pd = nuEndD * PDiso + nuIntD * PDsha;
+            As = nuEndS * ASmer + nuIntS * ASsha;
+            Ad = nuEndD * ADiso + nuIntD * ADsha;
+            break;
+        case 7:
+            Ps = nuEndS * PSmer + nuIntS * PSsha;
+            Pd = (nuEndD + nuIntD) * PDsha;
+            As = nuEndS * ASmer + nuIntS * ASsha;
+            Ad = (nuEndD + nuIntD) * ADsha;
+            break;
+        case 8:
+            Ps = nuEndS * PSmer + nuIntS * PSsha;
+            Pd = nuEndD * PDmer + nuIntD * PDsha;
+            As = nuEndS * ASmer + nuIntS * ASsha;
+            Ad = nuEndD * ADmer + nuIntD * ADsha;
+            break;
+        case 9:
+            Ps = PSiso + (nf - 1.0) * PSsha;
+            Pd = nf * PDsha;
+            As = ASiso + (nf - 1.0) * ASsha;
+            Ad = nf * ADsha;
+            break;
+        case 10:
+            Ps = nf * PSsha;
+            Pd = PDiso + (nf - 1.0) * PDsha;
+            As = nf * ASsha;
+            Ad = ADiso + (nf - 1.0) * ADsha;
+            break;
+        default:
+            Ps = nuEndS * PSiso + nuIntS * PSsha;
+            Pd = nuEndD * PDiso + nuIntD * PDsha;
+            As = nuEndS * ASiso + nuIntS * ASsha;
+            Ad = nuEndD * ADiso + nuIntD * ADsha;
+            break;
+    }
+    return 0;
+}
+
 void MosfetBSIM4Device::evaluateBase(double vgs, double vds, double vbs, bool probe) {
     const MosfetBSIM4Thermal& t = *thermal_;
-    const double mult = AREA_;
     const double gmin = t.gmin;
 
-    // ---- geometry helpers (Xyce NumFingerDiff / PAeffGeo / RdseffGeo) ----
-    double nf = (M_ > 0.0) ? M_ : 1.0;
-    // NumFingerDiff
-    double nuIntD = 0.0, nuEndD = 0.0, nuIntS = 0.0, nuEndS = 0.0;
-    if (nf > 1.0) {
-        nuEndD = 1.0;
-        nuEndS = 1.0;
-        nuIntD = nuIntS = nf - 2.0 * nuEndD;
-        if (nuIntD < 0.0) nuIntD = nuIntS = 0.0;
-    }
-    double Aseff = mult, Adeff = mult, Pseff = 0.0, Pdeff = 0.0;
-    // PAeffGeo (simplified but functional)
-    double DMCGeff = (model_->DMCG > 0.0) ? model_->DMCG : 0.0;
-    double DMCIeff = (model_->DMCI > 0.0) ? model_->DMCI : DMCGeff;
-    double DMDGeff = (model_->DMDG > 0.0) ? model_->DMDG : DMCGeff;
-    if (DMCGeff > 0.0) {
-        double baseS = W_ * (DMCGeff + DMCIeff);
-        double baseD = W_ * (DMDGeff + DMCIeff);
-        Aseff = mult * (1.0 + baseS / (W_ * L_ + 1e-18));
-        Adeff = mult * (1.0 + baseD / (W_ * L_ + 1e-18));
-        Pseff = (W_ + 2.0 * (DMCGeff + DMCIeff)) * (nf > 1.0 ? nf : 1.0);
-        Pdeff = (W_ + 2.0 * (DMDGeff + DMCIeff)) * (nf > 1.0 ? nf : 1.0);
-        if (nf > 1.0) { Aseff *= nf; Adeff *= nf; }
+    // ---- geometry (Xyce NumFingerDiff / PAeffGeo) ----------------------
+    // M (numberParallel) is NOT geometry: Xyce multiplies every terminal
+    // current/charge by it in the loaders (N_DEV_MOSFET_B4.C:7920).  The
+    // junction areas/perimeters below are ABSOLUTE (m^2, m) and depend only
+    // on NF, exactly as PAeffGeo (N_DEV_MOSFET_B4.C:8931) produces them.
+    const double nf = NF_;
+    const double M  = M_;
+
+    // Per-finger width.  DWJ is not ported yet, so weffCJ = W/nf + XW
+    // (Xyce B4p82.C:794,862).
+    const double weffCJ = (W_ / nf) + model_->XW;
+
+    // PAeffGeo case 0 (GEOMOD default).  DMCGT (temperature term) is not
+    // ported, so DMCGeff = DMCG (Xyce B4p82.C:2276-2278).
+    // DMCG default 0: fall back to a sensible default (Xyce leaves Aseff=0,
+    // but e-XSpice historically used W*L).  Use W*L when DMCG==0 so junctions
+    const double DMCG = model_->DMCG;
+    const double DMCI = (model_->DMCI > 0.0) ? model_->DMCI : (DMCG > 0.0 ? DMCG : 1.0);
+    const double DMDG = (model_->DMDG > 0.0) ? model_->DMDG : (DMCG > 0.0 ? DMCG : 1.0);
+
+    double PsGeo = 0.0, PdGeo = 0.0, AsGeo = 0.0, AdGeo = 0.0;
+    paEffGeo(nf, 0, 0, weffCJ, DMCG, DMCI, DMDG,
+             PsGeo, PdGeo, AsGeo, AdGeo);
+    (void)0;
+
+    double Aseff, Adeff, Pseff, Pdeff;
+    if (AS_ > 0.0) {
+        Aseff = AS_;
+    } else if (DMCG <= 0.0) {
+        Aseff = W_ * L_;
     } else {
-        Aseff = mult;
-        Adeff = mult;
-        Pseff = W_ * (nf > 1.0 ? nf : 1.0);
-        Pdeff = W_ * (nf > 1.0 ? nf : 1.0);
+        Aseff = AsGeo;
     }
+    if (Aseff <= 0.0) Aseff = W_ * L_;
+    if (AD_ > 0.0) {
+        Adeff = AD_;
+    } else if (DMCG <= 0.0) {
+        Adeff = W_ * L_;
+    } else {
+        Adeff = AdGeo;
+    }
+    if (Adeff <= 0.0) Adeff = W_ * L_;
+    // PERMOD != 0 strips the gate-edge contribution out of a given perimeter
+    // (Xyce B4p82.C:2293-2328).
+    if (PS_ > 0.0) {
+        Pseff = (model_->PERMOD != 0) ? std::max(0.0, PS_ - weffCJ * nf) : PS_;
+    } else if (DMCG <= 0.0) {
+        Pseff = 2.0 * W_;
+    } else {
+        Pseff = PsGeo;
+    }
+    if (Pseff <= 0.0) Pseff = 2.0 * W_;
+    if (PD_ > 0.0) {
+        Pdeff = (model_->PERMOD != 0) ? std::max(0.0, PD_ - weffCJ * nf) : PD_;
+    } else if (DMCG <= 0.0) {
+        Pdeff = 2.0 * W_;
+    } else {
+        Pdeff = PdGeo;
+    }
+    if (Pdeff <= 0.0) Pdeff = 2.0 * W_;
+    if (Aseff < 0.0) Aseff = 0.0;
+    if (Adeff < 0.0) Adeff = 0.0;
+    if (Pseff < 0.0) Pseff = 0.0;
+    if (Pdeff < 0.0) Pdeff = 0.0;
+
     // RdseffGeo / RdsEndIso (simplified)
     double RdsEff = 0.0;
     if (model_->RDSW > 0.0 && W_ > 0.0) {
@@ -542,8 +718,6 @@ void MosfetBSIM4Device::evaluateBase(double vgs, double vds, double vbs, bool pr
         RdsEff = Rsh * (1.0 + (model_->XRCRG1 > 0.0 ? model_->XRCRG1 : 0.0));
         RdsEff *= (1.0 + model_->PRT * (t.vt / (Const::KoverQ * model_->TNOM) - 1.0));
     }
-    (void)nuIntD; (void)nuEndD; (void)nuIntS; (void)nuEndS;
-    (void)Pseff; (void)Pdeff; (void)RdsEff;
 
     const double leff_early = L_ - 2.0 * model_->LD;
     const double leff = (leff_early > 0.0) ? leff_early : 1e-9;
@@ -565,27 +739,27 @@ void MosfetBSIM4Device::evaluateBase(double vgs, double vds, double vbs, bool pr
     const double phib = model_->PHI - vbs_e;
     double dvth_dvbs = 0.0;
     double vth = vto_n;
+    // Narrow-width term.  Xyce B4p82.C:3875:
+    //   Vth_NarrowW = toxe * phi / (weff + w0)
+    // (the old code used TOX/(W+W0) AND multiplied it by (phi - Vbs), which
+    // is not the BSIM4 form at all).
+    const double Vth_NarrowW =
+        model_->TOXE * model_->PHI / (weffCJ + model_->W0 + 1e-30);
     if (phib > 1e-3) {
         const double sq = std::sqrt(phib);
-        vth += model_->GAMMA * (sq - sqrtPhi);
-        dvth_dvbs = -model_->GAMMA / (2.0 * sq);
-        // K2
-        vth += model_->K2 * (phib - model_->PHI);
-        dvth_dvbs -= model_->K2;
-        // K3: narrow width
-        double W0 = model_->W0;
-        if (W0 == 0.0) W0 = 1e-9;
-        double k3term = model_->K3 * model_->TOX / (W_ + W0);
-        vth += k3term * (phib - model_->PHI);
-        dvth_dvbs -= k3term;
+        // Body effect: k1ox*(sqrt(Phis) - sqrt(phi)) - k2ox*Vbs.
+        // Xyce B4p82.C:3894-3897.  GAMMA/K2 were used before, which made the
+        // DC threshold disagree with Abulk and with the C-V block.
+        vth += t.k1ox * (sq - sqrtPhi);
+        dvth_dvbs = -t.k1ox / (2.0 * sq);
+        vth -= t.k2ox * vbs_e;
+        dvth_dvbs -= t.k2ox;
+        // K3 / K3B (narrow width): constant plus a body-bias slope.
+        vth += model_->K3 * Vth_NarrowW;
+        vth += model_->K3B * vbs_e * Vth_NarrowW;
+        dvth_dvbs += model_->K3B * Vth_NarrowW;
     } else {
-        vth += model_->GAMMA * (std::sqrt(1e-3) - sqrtPhi);
-    }
-    // K3B
-    if (model_->K3B != 0.0) {
-        double k3bterm = model_->K3B * model_->TOX / (W_ + model_->W0 + 1e-9);
-        vth += k3bterm * (phib - model_->PHI) * vbs_e;
-        dvth_dvbs -= k3bterm * (phib - model_->PHI);
+        vth += t.k1ox * (std::sqrt(1e-3) - sqrtPhi);
     }
     // KETA
     vth += model_->KETA * vbs_e;
@@ -617,7 +791,6 @@ void MosfetBSIM4Device::evaluateBase(double vgs, double vds, double vbs, bool pr
         double theta0vb0 = 1.0 / (1.0 + std::exp(-model_->PDIBLC1 * V0));
         double DIBL_Sft = eta * theta0vb0 * vds_e;
         vth -= DIBL_Sft;
-        // dvth_dvbs contribution
         double dtheta_dvbs = -0.5 * theta0vb0 * (1.0 - theta0vb0) * model_->PDIBLC1;
         double dDIBL_dvbs = model_->ETAB * theta0vb0 * vds_e + eta * dtheta_dvbs * vds_e;
         dvth_dvbs -= dDIBL_dvbs;
@@ -646,7 +819,7 @@ void MosfetBSIM4Device::evaluateBase(double vgs, double vds, double vbs, bool pr
     double k2_lod_add = 0.0;
     double dvth_lod = 0.0;
     if (SA_ > 0.0 && SB_ > 0.0) {
-        double nf_lod = (M_ > 0.0) ? M_ : 1.0;
+        double nf_lod = nf;   // fingers, not parallel devices (Xyce w/nf)
         double Ldrn = L_;
         double sd = SD_;
         if (sd <= 0.0 && nf_lod > 1.0) sd = 2.0 * 0.3e-6;
@@ -690,7 +863,7 @@ void MosfetBSIM4Device::evaluateBase(double vgs, double vds, double vbs, bool pr
     // ---- WPE (well proximity, Xyce 4.8.2) ----
     if (model_->WPEMOD) {
         double sca = SCA_, scb = SCB_, scc = SCC_, sc = SC_;
-        double Wdrn = W_ / ((M_ > 0.0) ? M_ : 1.0);
+        double Wdrn = W_ / nf;   // Xyce B4p82.C:765 — per-finger width
         if (sca == 0.0 && scb == 0.0 && scc == 0.0 && sc > 0.0) {
             double T1 = sc + Wdrn;
             double T2 = 1.0 / model_->SCREF;
@@ -723,9 +896,11 @@ void MosfetBSIM4Device::evaluateBase(double vgs, double vds, double vbs, bool pr
     double Xdep_ab = std::sqrt(2.0 * 11.7 * 8.854e-12 * model_->PHI / (Const::Q * model_->NSUB * 1e6 + 1e-20));
     if (Xdep_ab < 1e-9) Xdep_ab = 1e-9;
     double sqrtPhis_ab = std::sqrt(std::max(model_->PHI - vbs_e, 1e-6));
-    double Vth_NarrowW_ab = model_->TOX * model_->PHI / (W_ + model_->W0 + 1e-9);
-    double T1_ab = 0.5 * model_->K1 / sqrtPhis_ab + model_->K2 - model_->K3B * Vth_NarrowW_ab;
-    double T2_ab = model_->A0 * leff / (leff + 2.0 * std::sqrt(model_->XJ * Xdep_ab + 1e-30)) + model_->B0 / (W_ + model_->B1 + 1e-9);
+    double Vth_NarrowW_ab = Vth_NarrowW;   // same term the Vth block uses
+    // Xyce B4p82.C:4128-4129: T9 = 0.5*k1ox*Lpe_Vb/sqrtPhis (Lpe0/LPEB not
+    // ported -> Lpe_Vb = 1), T1 = T9 + k2ox - k3b*Vth_NarrowW.
+    double T1_ab = 0.5 * t.k1ox / sqrtPhis_ab + t.k2ox - model_->K3B * Vth_NarrowW_ab;
+    double T2_ab = model_->A0 * leff / (leff + 2.0 * std::sqrt(model_->XJ * Xdep_ab + 1e-30)) + model_->B0 / (weffCJ + model_->B1 + 1e-9);
     double Abulk0_ab = 1.0 + T1_ab * T2_ab;
     double dAbulk_dVg_ab = model_->AGS * model_->A0 * std::pow(ov > 0 ? ov : 0.0, 3.0) * 1e-3;
     double Abulk = Abulk0_ab + dAbulk_dVg_ab * ov;
@@ -885,7 +1060,7 @@ void MosfetBSIM4Device::evaluateBase(double vgs, double vds, double vbs, bool pr
     // WPE mobility
     if (model_->WPEMOD && model_->KU0WE != 0.0) {
         double sca = SCA_, scb = SCB_, scc = SCC_, sc = SC_;
-        double Wdrn = W_ / ((M_ > 0.0) ? M_ : 1.0);
+        double Wdrn = W_ / nf;   // per-finger width
         if (sca == 0.0 && scb == 0.0 && scc == 0.0 && sc > 0.0) {
             double T1 = sc + Wdrn;
             double T2 = 1.0 / model_->SCREF;
@@ -905,18 +1080,21 @@ void MosfetBSIM4Device::evaluateBase(double vgs, double vds, double vbs, bool pr
         if (sc == 0.0) sc = (model_->SCA + model_->SCB + model_->SCC) / 3.0;
         ueff *= (1.0 + model_->KU0WE * sc * 1e-9);
     }
-    // temperature mobility (UTE)
-    {
-        double TRatio = t.vt / (Const::KoverQ * model_->TNOM);
-        ueff *= std::pow(TRatio, model_->UTE);
-    }
+    // temperature mobility (UTE): already folded into t.u0 by scaleTo()
+    // (Xyce B4p82.C:1615: u0temp = u0 * pow(TRatio, ute)).  Applying it a
+    // second time here would cancel it out, so this block is gone.
     // update denom_mob consistency
     denom_mob = t.u0 / ueff;
 
-    // ---- beta ----
-    const double beta = model_->KP * (W_ / leff) * M_;
-    const double beta_over_u0 = beta / denom_mob;
-    const double dbeta_over_u0_dov = -beta * ddenom_dov / (denom_mob * denom_mob);
+    // ---- beta -----------------------------------------------------------
+    // Xyce B4p82.C:4581-4584: beta = ueff * CoxeffWovL with
+    // CoxeffWovL = Coxeff * Weff / Leff.  Using ueff (not the SPICE3 KP)
+    // is what makes the model honour U0; KP only feeds the U0 = KP/Cox
+    // bridge in applyDefaults().  Weff is the PER-FINGER width, so the
+    // nf factor must NOT be multiplied in again.
+    const double beta_over_u0 = ueff * t.cox * (weffCJ / leff) * M;
+    const double dbeta_over_u0_dov =
+        -beta_over_u0 * ddenom_dov / denom_mob;
 
     // ---- drain current (BSIM4 complete) ----
     double Id = 0.0, gm = 0.0, gds = 0.0, gmbs = 0.0;
@@ -1019,9 +1197,19 @@ void MosfetBSIM4Device::evaluateBase(double vgs, double vds, double vbs, bool pr
     }
 
     // ---- bulk diodes (PHYSICAL frame) ----
+    // Xyce B4p82.C:2445-2448: SourceSatCurrent =
+    //   Aseff*JS + Pseff*JSWS + weffCJ*nf*JSWGS
+    // (and the drain-side twin).  Everything is scaled by M here because the
+    // device reports ONE parallel multiplier's worth of terminals.
     const double vbd_p = vbs - vds;
-    const double isBulkS = t.isat * Aseff;
-    const double isBulkD = t.isat * Adeff;
+    const double satS = t.jctS.isatArea * Aseff
+                      + t.jctS.isatSide * Pseff
+                      + t.jctS.isatGate * weffCJ * nf;
+    const double satD = t.jctD.isatArea * Adeff
+                      + t.jctD.isatSide * Pdeff
+                      + t.jctD.isatGate * weffCJ * nf;
+    const double isBulkS = M * satS;
+    const double isBulkD = M * satD;
     double arg = std::min(Const::MaxExpArg, vbs / t.vt);
     const double evbs = std::exp(arg);
     const double Ibs = isBulkS * (evbs - 1.0) + gmin * vbs;
@@ -1117,6 +1305,8 @@ void MosfetBSIM4Device::evaluateBase(double vgs, double vds, double vbs, bool pr
         }
     }
 
+    std::fprintf(stderr, "[dbg] Aseff=%.3g Adeff=%.3g Pseff=%.3g Pdeff=%.3g weffCJ=%.3g nf=%.3g\\n",
+                Aseff, Adeff, Pseff, Pdeff, weffCJ, nf);
     // ---- map channel to physical frame ----
     const double sid = sw ? -1.0 : 1.0;
     id_ = sid * Id + Ibd + Igidl;
@@ -1235,20 +1425,42 @@ void MosfetBSIM4Device::evaluateBase(double vgs, double vds, double vbs, bool pr
                             : (ci.qdrn - qgdo);
 
     // Junction (depletion) charges of the drain and source junctions.
-    const double factor = t.bulkCap.cjo;
-    const JunctionGeom geomS{model_->CBS * mult * factor, 0.0, model_->MJ};
-    const JunctionGeom geomD{model_->CBD * mult * factor, 0.0, model_->MJ};
+    // Xyce B4p82.C:3348-3695 evaluates the bottom, sidewall and gate-edge
+    // terms separately; junctionCharge() already takes an AREA-scaled
+    // geometry, so each term gets its own JunctionGeom.  M is applied once,
+    // at the node charges below.
+    const double mAreaS = (model_->MJS > 0.0) ? model_->MJS : model_->MJ;
+    const double mAreaD = (model_->MJD > 0.0) ? model_->MJD : model_->MJ;
+    const JunctionGeom geomS0{t.jctS.capArea.cjo * Aseff, 0.0, mAreaS};
+    const JunctionGeom geomS1{t.jctS.capSide.cjo * Pseff, 0.0, model_->MJSWS};
+    const JunctionGeom geomS2{t.jctS.capGate.cjo * weffCJ * nf, 0.0, model_->MJSWGS};
+    const JunctionGeom geomD0{t.jctD.capArea.cjo * Adeff, 0.0, mAreaD};
+    const JunctionGeom geomD1{t.jctD.capSide.cjo * Pdeff, 0.0, model_->MJSWD};
+    const JunctionGeom geomD2{t.jctD.capGate.cjo * weffCJ * nf, 0.0, model_->MJSWGD};
+
     const JunctionChargePoint jbs =
-        junctionCharge(vbs, 0.0, 0.0, geomS, t.bulkCap);
+        junctionCharge(vbs, 0.0, 0.0, geomS0, t.jctS.capArea);
+    const JunctionChargePoint jbs1 =
+        junctionCharge(vbs, 0.0, 0.0, geomS1, t.jctS.capSide);
+    const JunctionChargePoint jbs2 =
+        junctionCharge(vbs, 0.0, 0.0, geomS2, t.jctS.capGate);
     const JunctionChargePoint jbd =
-        junctionCharge(vbd_p, 0.0, 0.0, geomD, t.bulkCap);
+        junctionCharge(vbd_p, 0.0, 0.0, geomD0, t.jctD.capArea);
+    const JunctionChargePoint jbd1 =
+        junctionCharge(vbd_p, 0.0, 0.0, geomD1, t.jctD.capSide);
+    const JunctionChargePoint jbd2 =
+        junctionCharge(vbd_p, 0.0, 0.0, geomD2, t.jctD.capGate);
+
+    const double qjs = jbs.q + jbs1.q + jbs2.q;
+    const double qjd = jbd.q + jbd1.q + jbd2.q;
 
     // Node charges (N-oriented). Xyce loadDAEQVector scales them by the
     // number of parallel devices (M).
-    qg_ = qgateT * M_;
-    qd_ = (qdrnT - jbd.q) * M_;
-    qb_ = (qbulkT + jbs.q + jbd.q) * M_;
+    qg_ = qgateT * M;
+    qd_ = (qdrnT - qjd) * M;
+    qb_ = (qbulkT + qjs + qjd) * M;
     qdef_ = 0.0;
+    (void)0;
 }
 
 void MosfetBSIM4Device::evaluate(double vgs, double vds, double vbs) {

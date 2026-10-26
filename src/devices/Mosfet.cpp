@@ -44,6 +44,7 @@ Mosfet::Mosfet(const std::string& name,
     : Device(name, DeviceType::MOSFET)
     , model_(std::move(model))
     , inst_(inst) {
+    (void)0;
     if (!model_) {
         throw std::invalid_argument("MOSFET requires a model card");
     }
@@ -91,9 +92,16 @@ Mosfet::Mosfet(const std::string& name,
                                              inst_.AD > 0.0 ? inst_.AD : 1.0e-12);
         } else {
             // Reference C++ implementation.
+            // M (numberParallel) and NF (number of fingers) are different
+            // things: M scales every terminal current/charge, NF only
+            // changes the junction geometry.  AD/AS/PD/PS are absolute
+            // areas/perimeters (Xyce Instance::processParams4p82_).
+            (void)0;
             bsim4Device_ = new MosfetBSIM4Device(bsim4Model_,
                                                  inst_.W, inst_.L, inst_.M,
-                                                 inst_.M,  // AREA
+                                                 inst_.NF,
+                                                 inst_.AD, inst_.AS,
+                                                 inst_.PD, inst_.PS,
                                                  inst_.SA, inst_.SB, inst_.SD,
                                                  inst_.SCA, inst_.SCB, inst_.SCC,
                                                  inst_.SC);
@@ -139,16 +147,95 @@ Mosfet::Mosfet(const std::string& name,
         cgbo_ = level1Model()->CGBO * leff_ * inst_.M;
     }
 
-    // ---- BSIM4 internal-node layout (rgate/rbody/rds) ----
+    // ---- BSIM4 series/gate/body resistance nodes ------------------------
+    // Xyce Instance::processParams4p82_ (N_DEV_MOSFET_B4p82.C:221-2434)
+    // creates an internal node whenever a series resistance exists and
+    // stamps the LINEAR sheet resistance as a plain conductance between the
+    // external and the intrinsic node:
+    //     Rs = RSH * NRS ,  Rd = RSH * NRD                    (squares)
+    //     Rg = RSHG*(XGW + weffCJ/3/NGCON)/(NGCON*NF*(Lnew-XGL))  (rgateMod 1)
+    // A node whose resistance evaluates to 0 is shorted with 1e3 S, exactly
+    // like Xyce (B4p82.C:2394 and 2427).
+    //
+    // The bias-dependent Rd(V)/Rs(V) of rdsMod != 0 lives INSIDE
+    // MosfetBSIM4Device (RDSW/PRWG/PRWB), so it is not duplicated here.
+    // Modes that need more than one extra node (rgateMod 2/3, rbodyMod
+    // 1/2, rgeoMod) are not ported: they fall back to 0 with a one-time
+    // warning instead of leaving a floating internal node behind.
     if (bsim4Model_) {
-        int rgatemod = (inst_.RGATEMOD > 0) ? inst_.RGATEMOD : bsim4Model_->RGATEMOD;
-        int rdsmod = bsim4Model_->RDSMOD;
-        int rbodymod = (inst_.RBODYMOD > 0) ? inst_.RBODYMOD : bsim4Model_->RBODYMOD;
-        if (rgatemod > 0) { offG_ = numInternal_++; }
-        if (rdsmod > 0) { offD_ = numInternal_++; offS_ = numInternal_++; }
-        if (rbodymod > 0) { offB_ = numInternal_++; }
-        if (offS_ >= 0) rs_ = (inst_.NRS > 0) ? (bsim4Model_->RDSW * inst_.NRS / (inst_.W * inst_.NF)) : 1e6;
-        if (offB_ >= 0) rb_ = (bsim4Model_->RBODYMOD > 0) ? (1.0 / (bsim4Model_->RSH * inst_.NF)) : 1e6;
+        const MosfetBSIM4Model& m = *bsim4Model_;
+        const double nf = (inst_.NF > 0.0) ? inst_.NF : 1.0;
+        const double weffCJ = inst_.W / nf + m.XW;
+        const double Lnew = inst_.L / nf + m.XL;
+
+        int rgatemod = (inst_.RGATEMOD > 0) ? inst_.RGATEMOD : m.RGATEMOD;
+        int rbodymod = (inst_.RBODYMOD > 0) ? inst_.RBODYMOD : m.RBODYMOD;
+        if (rgatemod < 0 || rgatemod > 3) rgatemod = 0;
+        if (rbodymod < 0 || rbodymod > 2) rbodymod = 0;
+        if (rgatemod >= 2) {
+            std::fprintf(stderr,
+                "Warning: %s RGATEMOD=%d is not supported by the BSIM4 "
+                "reference device (needs 2 extra nodes); using RGATEMOD=0.\n",
+                getName().c_str(), rgatemod);
+            rgatemod = 0;
+        }
+        if (rbodymod == 2) {
+            std::fprintf(stderr,
+                "Warning: %s RBODYMOD=2 (full body network) is not fully "
+                "ported; using RBODYMOD=1 (single internal node).\\n",
+                getName().c_str());
+            rbodymod = 1;
+        }
+        if (rbodymod == 1) {
+            offB_ = numInternal_++;
+            auto Rof = [&](double instVal, double modelVal) {
+                double r = (instVal > 0.0) ? instVal
+                          : (modelVal > 0.0 ? modelVal : 0.0);
+                return r;
+            };
+            const double Rbdb = Rof(inst_.RBDB, m.RBDB);
+            const double Rbsb = Rof(inst_.RBSB, m.RBSB);
+            const double Rbpb = Rof(inst_.RBPB, m.RBPB);
+            const double Rbps = Rof(inst_.RBPS, m.RBPS);
+            const double Rbpd = Rof(inst_.RBPD, m.RBPD);
+            gRbdb_ = (Rbdb > 0.0) ? 1.0 / Rbdb : 1.0e3;
+            gRbsb_ = (Rbsb > 0.0) ? 1.0 / Rbsb : 1.0e3;
+            gRbpb_ = (Rbpb > 0.0) ? 1.0 / Rbpb : 1.0e3;
+            gRbps_ = (Rbps > 0.0) ? 1.0 / Rbps : 1.0e3;
+            gRbpd_ = (Rbpd > 0.0) ? 1.0 / Rbpd : 1.0e3;
+        }
+
+        // Source / drain sheet resistance.  Xyce also creates the nodes when
+        // rdsMod != 0 alone; RSH == 0 then shorts them with 1e3 S.
+        const bool wantRds = (m.RDSMOD != 0) ||
+                             (m.RSH > 0.0 && (inst_.NRD > 0.0 || inst_.NRS > 0.0));
+        if (wantRds) {
+            const double Rd = (m.RSH > 0.0) ? m.RSH * inst_.NRD : 0.0;
+            const double Rs = (m.RSH > 0.0) ? m.RSH * inst_.NRS : 0.0;
+            offD_ = numInternal_++;
+            offS_ = numInternal_++;
+            gDrain_  = (Rd > 0.0) ? 1.0 / Rd : 1.0e3;
+            gSource_ = (Rs > 0.0) ? 1.0 / Rs : 1.0e3;
+        }
+
+        // Gate resistance, rgateMod == 1 (single distributed element).
+        if (rgatemod == 1) {
+            double Rg = m.RSHG * (m.XGW + weffCJ / 3.0 / m.NGCON) /
+                        (m.NGCON * nf * (Lnew - m.XGL));
+            Rg = (Rg > 0.0) ? 1.0 / Rg : 1.0e3;
+            offG_ = numInternal_++;
+            gGate_ = Rg;
+        }
+    }
+
+    // Fixed Jacobian slot layout: the 4x4 device block comes first, then one
+    // quad per resistor, in the D/S/G/B order used everywhere below.
+    {
+        int pat = 16;
+        if (offD_ >= 0) { patRd_ = pat; pat += 4; }
+        if (offS_ >= 0) { patRs_ = pat; pat += 4; }
+        if (offG_ >= 0) { patRg_ = pat; pat += 4; }
+        if (offB_ >= 0) { patRb_ = pat; pat += 4; }
     }
 
     nodes_.push_back(drain);   // 0
@@ -244,55 +331,25 @@ void Mosfet::registerJacobianPattern(std::vector<int>& rows,
         }
     }
 
-    // Ohmic resistors (external <-> intrinsic): 4 entries each.
-    // Track slot base for each resistor.
-    int base = 16;
-    if (offD_ >= 0) {
-        const_cast<Mosfet*>(this)->patRd_ = base;
-        const int pairs[4][2] = {{re[0],re[0]},{re[0],ri[0]},{ri[0],re[0]},{ri[0],ri[0]}};
+    // Ohmic resistors (external <-> intrinsic): 4 entries each, registered
+    // in the fixed D/S/G/B order that the constructor used to lay out
+    // patRd_/patRs_/patRg_/patRb_.  Keeping both sides on the same fixed
+    // layout is what keeps jac_slots_ and the loaders aligned (the old code
+    // recomputed a local `base` and could drift by 4 slots).
+    auto quad = [&](int ext, int intr) {
+        const int pairs[4][2] = {{ext, ext}, {ext, intr},
+                                 {intr, ext}, {intr, intr}};
         for (int k = 0; k < 4; ++k) {
             if (pairs[k][0] >= 0 && pairs[k][1] >= 0) {
                 rows.push_back(pairs[k][0]);
                 cols.push_back(pairs[k][1]);
-                base++;
             }
         }
-        const_cast<Mosfet*>(this)->patRd_ = 16; // slot base in jac_slots_
-    }
-    if (offS_ >= 0) {
-        const_cast<Mosfet*>(this)->patRs_ = base;
-        const int pairs[4][2] = {{re[2],re[2]},{re[2],ri[2]},{ri[2],re[2]},{ri[2],ri[2]}};
-        for (int k = 0; k < 4; ++k) {
-            if (pairs[k][0] >= 0 && pairs[k][1] >= 0) {
-                rows.push_back(pairs[k][0]);
-                cols.push_back(pairs[k][1]);
-                base++;
-            }
-        }
-        const_cast<Mosfet*>(this)->patRs_ = (offD_ >= 0) ? 16 + 4 : 16; // approximate
-    }
-    if (offG_ >= 0) {
-        const_cast<Mosfet*>(this)->patRg_ = base;
-        const int pairs[4][2] = {{re[1],re[1]},{re[1],ri[1]},{ri[1],re[1]},{ri[1],ri[1]}};
-        for (int k = 0; k < 4; ++k) {
-            if (pairs[k][0] >= 0 && pairs[k][1] >= 0) {
-                rows.push_back(pairs[k][0]);
-                cols.push_back(pairs[k][1]);
-                base++;
-            }
-        }
-    }
-    if (offB_ >= 0) {
-        const_cast<Mosfet*>(this)->patRb_ = base;
-        const int pairs[4][2] = {{re[3],re[3]},{re[3],ri[3]},{ri[3],re[3]},{ri[3],ri[3]}};
-        for (int k = 0; k < 4; ++k) {
-            if (pairs[k][0] >= 0 && pairs[k][1] >= 0) {
-                rows.push_back(pairs[k][0]);
-                cols.push_back(pairs[k][1]);
-                base++;
-            }
-        }
-    }
+    };
+    if (offD_ >= 0) quad(re[0], ri[0]);
+    if (offS_ >= 0) quad(re[2], ri[2]);
+    if (offG_ >= 0) quad(re[1], ri[1]);
+    if (offB_ >= 0) quad(re[3], ri[3]);
 }
 
 void Mosfet::beginSolve(bool initial_solve) {
@@ -588,31 +645,33 @@ void Mosfet::loadF(const DaeSolution& x, double time,
                                bsim4Device_->vdsLim(),
                                bsim4Device_->vbsLim());
         bsim4Device_->loadF(F, ri[0], ri[1], ri[2], ri[3]);
-        // Ohmic resistors (external -> intrinsic): physical, no polarity.
-        if (false) {
-            const double vd_ext = (re[0] >= 0) ? x.data()[re[0]] : 0.0;
-            const double vd_int = (ri[0] >= 0) ? x.data()[ri[0]] : 0.0;
-            if (re[0] >= 0) F[re[0]] += rd_ * (vd_ext - vd_int);
-            if (ri[0] >= 0) F[ri[0]] += rd_ * (vd_int - vd_ext);
-        }
-        if (offS_ >= 0 && rs_ > 0.0) {
-            const double vs_ext = (re[2] >= 0) ? x.data()[re[2]] : 0.0;
-            const double vs_int = (ri[2] >= 0) ? x.data()[ri[2]] : 0.0;
-            if (re[2] >= 0) F[re[2]] += rs_ * (vs_ext - vs_int);
-            if (ri[2] >= 0) F[ri[2]] += rs_ * (vs_int - vs_ext);
-        }
-        if (offG_ >= 0 && rg_ > 0.0) {
-            const double vg_ext = (re[1] >= 0) ? x.data()[re[1]] : 0.0;
-            const double vg_int = (ri[1] >= 0) ? x.data()[ri[1]] : 0.0;
-            if (re[1] >= 0) F[re[1]] += rg_ * (vg_ext - vg_int);
-            if (ri[1] >= 0) F[ri[1]] += rg_ * (vg_int - vg_ext);
-        }
-        if (offB_ >= 0 && rb_ > 0.0) {
-            const double vb_ext = (re[3] >= 0) ? x.data()[re[3]] : 0.0;
-            const double vb_int = (ri[3] >= 0) ? x.data()[ri[3]] : 0.0;
-            if (re[3] >= 0) F[re[3]] += rb_ * (vb_ext - vb_int);
-            if (ri[3] >= 0) F[ri[3]] += rb_ * (vb_int - vb_ext);
-        }
+        // Ohmic resistors (external <-> intrinsic).  These are plain linear
+        // conductances, so they are polarity-free and use physical voltages.
+        // gDrain_/gSource_/gGate_ are Siemens (see the ctor).
+        auto stampR = [&](double g, int re, int ri) {
+            if (g <= 0.0 || re < 0 || ri < 0) return;
+            const double v_ext = x.data()[re];
+            const double v_int = x.data()[ri];
+            F[re] += g * (v_ext - v_int);
+            F[ri] += g * (v_int - v_ext);
+        };
+        stampR(gDrain_,  re[0], ri[0]);
+        stampR(gSource_, re[2], ri[2]);
+        stampR(gGate_,   re[1], ri[1]);
+        stampR(gBody_,   re[3], ri[3]);
+        // Body network (RBODYMOD 1): 5 resistors.
+        auto stamp2 = [&](double g, int a, int b) {
+            if (g <= 0.0 || a < 0 || b < 0) return;
+            const double va = x.data()[a];
+            const double vb = x.data()[b];
+            F[a] += g * (va - vb);
+            F[b] += g * (vb - va);
+        };
+        stamp2(gRbdb_, re[0], ri[3]);
+        stamp2(gRbsb_, re[2], ri[3]);
+        stamp2(gRbpb_, re[3], ri[3]);
+        stamp2(gRbps_, re[3], re[2]);
+        stamp2(gRbpd_, re[3], re[0]);
         pullBSIM4();
         bsim4Device_->commitLimited();
         first_solve_ = false;
@@ -733,45 +792,39 @@ void Mosfet::loadJacobianF(DaeMatrix& J, const DaeSolution& x,
         // Device Jacobian on intrinsic rows (first 16 slots).
         std::vector<int> devSlots(jac_slots_.begin(), jac_slots_.begin() + 16);
         bsim4Device_->loadJacobianF(J, devSlots);
-        // Ohmic resistor conductances.
-        int slotBase = 16;
-        if (false) {
-            // entries: (re,re), (re,ri), (ri,re), (ri,ri)
-            if (slotBase + 3 < (int)jac_slots_.size()) {
-                J.accumulateSlot(jac_slots_[slotBase+0], rd_);
-                J.accumulateSlot(jac_slots_[slotBase+1], -rd_);
-                J.accumulateSlot(jac_slots_[slotBase+2], -rd_);
-                J.accumulateSlot(jac_slots_[slotBase+3], rd_);
-            }
-            slotBase += 4;
-        }
-        if (offS_ >= 0 && rs_ > 0.0) {
-            if (slotBase + 3 < (int)jac_slots_.size()) {
-                J.accumulateSlot(jac_slots_[slotBase+0], rs_);
-                J.accumulateSlot(jac_slots_[slotBase+1], -rs_);
-                J.accumulateSlot(jac_slots_[slotBase+2], -rs_);
-                J.accumulateSlot(jac_slots_[slotBase+3], rs_);
-            }
-            slotBase += 4;
-        }
-        if (offG_ >= 0 && rg_ > 0.0) {
-            if (slotBase + 3 < (int)jac_slots_.size()) {
-                J.accumulateSlot(jac_slots_[slotBase+0], rg_);
-                J.accumulateSlot(jac_slots_[slotBase+1], -rg_);
-                J.accumulateSlot(jac_slots_[slotBase+2], -rg_);
-                J.accumulateSlot(jac_slots_[slotBase+3], rg_);
-            }
-            slotBase += 4;
-        }
-        if (offB_ >= 0 && rb_ > 0.0) {
-            if (slotBase + 3 < (int)jac_slots_.size()) {
-                J.accumulateSlot(jac_slots_[slotBase+0], rb_);
-                J.accumulateSlot(jac_slots_[slotBase+1], -rb_);
-                J.accumulateSlot(jac_slots_[slotBase+2], -rb_);
-                J.accumulateSlot(jac_slots_[slotBase+3], rb_);
-            }
-            slotBase += 4;
-        }
+        // Ohmic resistor conductances: +g on the diagonal entries, -g on the
+        // cross terms.  Slots come from the fixed layout built in the ctor,
+        // so they always line up with registerJacobianPattern().
+        auto stampRJ = [&](double g, int base) {
+            if (g <= 0.0 || base < 0) return;
+            if (base + 3 >= (int)jac_slots_.size()) return;
+            J.accumulateSlot(jac_slots_[base + 0],  g);
+            J.accumulateSlot(jac_slots_[base + 1], -g);
+            J.accumulateSlot(jac_slots_[base + 2], -g);
+            J.accumulateSlot(jac_slots_[base + 3],  g);
+        };
+        stampRJ(gDrain_,  patRd_);
+        stampRJ(gSource_, patRs_);
+        stampRJ(gGate_,   patRg_);
+        stampRJ(gBody_,   patRb_);
+        // Body network (RBODYMOD 1): 5 resistors.  Stamped directly (debug
+        // path) since their slots are not part of the fixed pattern.
+        auto stamp2J = [&](double g, int a, int b) {
+            if (g <= 0.0 || a < 0 || b < 0) return;
+            J.add(a, a,  g);
+            J.add(a, b, -g);
+            J.add(b, a, -g);
+            J.add(b, b,  g);
+        };
+        const int rd = rowOf(nodes_[0]);
+        const int rs = rowOf(nodes_[2]);
+        const int rb = rowOf(nodes_[3]);
+        const int ri_b = rowBi();
+        stamp2J(gRbdb_, rd, ri_b);
+        stamp2J(gRbsb_, rs, ri_b);
+        stamp2J(gRbpb_, rb, ri_b);
+        stamp2J(gRbps_, rb, rs);
+        stamp2J(gRbpd_, rb, rd);
         return;
     }
     // BSIM4 level-2 path with Berkeley C kernel adapter.

@@ -39,7 +39,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace e_XSpice;
@@ -379,6 +381,211 @@ int main(int argc, char** argv) {
             }
             ok = ok && (g_failures == 0);
         }
+    }
+
+    // ---- 6) P0 regression guards --------------------------------------
+    //
+    // These lock in the fixes of the "P0" audit batch.  Each one failed
+    // before the fix:
+    //   a) junction current scaled with M^2 (AREA was fed M and NF was fed M)
+    //   b) U0 was ignored by the channel current (beta used SPICE3 KP)
+    //   c) the DC threshold read GAMMA while Abulk read K1 -> no body effect
+    //      by default, and the two blocks disagreed
+    //   d) the junction depletion charge was always zero (bulkCap never
+    //      populated, and CBS was multiplied by its own temperature factor)
+    //   e) the RDSMOD/RGATEMOD internal nodes were never stamped (drain
+    //      resistor behind `if (false)`, rg_/rd_ never set, resistances used
+    //      as conductances) and the Jacobian slots were misaligned by 4
+    if (master) std::printf("\n6) P0 regression guards\n");
+    {
+        using KV = std::pair<std::string, double>;
+        const double NaN = std::numeric_limits<double>::quiet_NaN();
+
+        auto cardX = [](ModelRegistry& reg, const std::string& name,
+                        bool nmos, const std::vector<KV>& extra) {
+            ModelCard card;
+            card.name = name;
+            card.type = nmos ? "NMOS2" : "PMOS2";
+            card.params["LEVEL"] = 2.0;
+            card.params["VTH0"] = nmos ? 0.4 : -0.4;
+            card.params["KP"] = nmos ? 100e-6 : 40e-6;
+            for (const auto& kv : extra) card.params[kv.first] = kv.second;
+            reg.createModel(card);
+            return reg.findAs<MosfetBSIM4Model>(name);
+        };
+
+        // Junction-only operating point: gate far below Vth, drain biased
+        // against the bulk by an ideal source, so only the bulk diode runs.
+        auto junctionOp = [&](bool nmos, const MosfetInstanceParams& in,
+                              const std::vector<KV>& extra, double vd,
+                              double& id, double& qd) {
+            ModelRegistry reg;
+            RCP<const MosfetBSIM4Model> m = cardX(reg, "NJ", nmos, extra);
+            Circuit c("j");
+            Node* gnd = c.getGroundNode();
+            Node* d = c.addNode(1, "D");
+            Node* g = c.addNode(2, "G");
+            c.addDevice(make_rcp<VoltageSource>("V1", d, gnd,
+                                                 SourceWaveform::dc(vd)));
+            c.addDevice(make_rcp<VoltageSource>("V2", g, gnd,
+                                                 SourceWaveform::dc(0.0)));
+            (void)0;
+            c.addDevice(make_rcp<Mosfet>("M1", d, g, gnd, gnd,
+                                         RCP<const DeviceModel>(m), in));
+            DCAnalysis dc(c);
+            dc.setVerbose(false);
+            DCResult r = dc.run(false, false);
+            id = NaN; qd = NaN;
+            if (!r.success) return false;
+            auto* mos = dynamic_cast<Mosfet*>(c.getDevice("M1"));
+            if (!mos) return false;
+            id = mos->getDrainCurrent();
+            qd = mos->getChargeDrain();
+            return true;
+        };
+
+        // Common-source stage used by the U0 / body-effect / series-R checks.
+        auto commonSource = [&](const std::vector<KV>& extra,
+                                const MosfetInstanceParams& in,
+                                double vbs, double& vd, double& id) {
+            ModelRegistry reg;
+            RCP<const MosfetBSIM4Model> m = cardX(reg, "NC", true, extra);
+            Circuit c("cs");
+            Node* gnd = c.getGroundNode();
+            Node* rail = c.addNode(1, "RAIL");
+            Node* g = c.addNode(2, "G");
+            Node* d = c.addNode(3, "D");
+            Node* b = c.addNode(4, "B");
+            c.addDevice(make_rcp<VoltageSource>("V1", rail, gnd,
+                                                 SourceWaveform::dc(3.0)));
+            c.addDevice(make_rcp<VoltageSource>("V2", g, gnd,
+                                                 SourceWaveform::dc(2.0)));
+            c.addDevice(make_rcp<VoltageSource>("V3", b, gnd,
+                                                 SourceWaveform::dc(vbs)));
+            c.addDevice(make_rcp<Resistor>("R1", rail, d, 1e3));
+            c.addDevice(make_rcp<Resistor>("RG", d, gnd, 1e6));
+            c.addDevice(make_rcp<Mosfet>("M1", d, g, gnd, b,
+                                         RCP<const DeviceModel>(m), in));
+            DCAnalysis dc(c);
+            dc.setVerbose(false);
+            DCResult r = dc.run(false, false);
+            vd = NaN; id = NaN;
+            if (!r.success) return false;
+            const int idx = nodeIndex(c, c.getNode(3));
+            vd = r.node_voltages[idx];
+            auto* mos = dynamic_cast<Mosfet*>(c.getDevice("M1"));
+            if (!mos) return false;
+            id = mos->getDrainCurrent();
+            return true;
+        };
+
+        // (a) M scales the junction current linearly, not quadratically.
+        {
+            const std::vector<KV> jpar = {{"VTH0", 1.5}, {"JSS", 1.0}};
+            MosfetInstanceParams in1, in2;
+            in1.W = 100e-6; in1.L = 1e-6; in1.M = 1.0; in1.NF = 1.0;
+            in1.AD = 1e-6; in1.AS = 1e-6;
+            in2 = in1; in2.M = 2.0;
+            double i1 = 0.0, q1 = 0.0, i2 = 0.0, q2 = 0.0;
+            const bool ok1 = junctionOp(true, in1, jpar, 1.0, i1, q1);
+            const bool ok2 = junctionOp(true, in2, jpar, 1.0, i2, q2);
+            checkTrue("junction-only DC converges (M=1 and M=2)", ok1 && ok2);
+            checkTrue("junction current is non-zero (JSS is honoured)",
+                      ok1 && std::abs(i1) > 1e-9);
+            checkTrue("M=2 junction current is exactly 2x M=1 (was M^2)",
+                      ok1 && ok2 &&
+                      std::abs(i2 - 2.0 * i1) < 1e-3 * std::abs(i1));
+            checkTrue("M=2 junction charge is exactly 2x M=1",
+                      ok1 && ok2 &&
+                      std::abs(q2 - 2.0 * q1) < 1e-3 * std::abs(q1));
+        }
+
+        // (b) A U0-only card must match the equivalent KP card.
+        {
+            const double cox = 3.9 * 8.854214871e-12 / 30.0e-10;
+            const double u0 = 0.05;
+            MosfetInstanceParams in;
+            in.W = 2e-6; in.L = 0.5e-6;
+            double vdu = 0.0, idu = 0.0, vdk = 0.0, idk = 0.0;
+            const bool oku = commonSource({{"U0", u0}}, in, 0.0, vdu, idu);
+            const bool okk = commonSource({{"KP", u0 * cox}}, in, 0.0,
+                                          vdk, idk);
+            checkTrue("U0-only and KP cards both converge", oku && okk);
+            checkTrue("U0-only card conducts (U0 is no longer ignored)",
+                      oku && std::abs(idu) > 1e-6);
+            checkTrue("U0-only card matches the equivalent KP card",
+                      oku && okk &&
+                      std::abs(idu - idk) < 1e-6 * std::abs(idk));
+        }
+
+        // (c) Body effect: with K1 given the DC threshold must move with Vbs.
+        {
+            MosfetInstanceParams in;
+            in.W = 2e-6; in.L = 0.5e-6;
+            double v0 = 0.0, i0 = 0.0, vb = 0.0, ib = 0.0;
+            const bool ok0 = commonSource({{"K1", 0.5}}, in, 0.0, v0, i0);
+            const bool okb = commonSource({{"K1", 0.5}}, in, -1.0, vb, ib);
+            checkTrue("body-bias sweep converges", ok0 && okb);
+            (void)0;
+            checkTrue("K1 produces a real body effect (Id falls at Vbs=-1V)",
+                      ok0 && okb && ib < 0.9 * i0 && std::abs(ib) > 1e-9);
+        }
+
+        // (d) Junction depletion charge appears once CJS is non-zero.
+        {
+            const std::vector<KV> base = {{"VTH0", 1.5}, {"CJD", 0.0}, {"CJSWD", 0.0}, {"CJSWGD", 0.0}};
+            MosfetInstanceParams in;
+            in.W = 100e-6; in.L = 1e-6;
+            in.AD = 1e-6; in.AS = 1e-6;
+            double i0 = 0.0, q0 = 0.0, i1 = 0.0, q1 = 0.0;
+            const bool ok0 = junctionOp(true, in, base, 1.0, i0, q0);
+            std::vector<KV> withC = base;
+            withC.push_back({"CJD", 5e-4});
+            const bool ok1 = junctionOp(true, in, withC, 1.0, i1, q1);
+            {
+                ModelRegistry reg;
+                RCP<const MosfetBSIM4Model> m0 = cardX(reg, "DA", true, base);
+                ModelRegistry reg2;
+                RCP<const MosfetBSIM4Model> m1 = cardX(reg2, "DB", true, withC);
+                (void)m0; (void)m1;
+            }
+            checkTrue("CJS on/off both converge", ok0 && ok1);
+            (void)0;
+            checkTrue("junction depletion charge is zero with CJD=0",
+                      ok0 && std::abs(q0) < 1e-13);
+            checkTrue("junction depletion charge appears with CJD>0",
+                      ok0 && ok1 && std::abs(q1 - q0) > 1e-15);
+        }
+
+        // (e) RDSMOD/RGATEMOD internal nodes are stamped, not floating.
+        {
+            MosfetInstanceParams in;
+            in.W = 2e-6; in.L = 0.5e-6; in.NRD = 1.0; in.NRS = 1.0;
+            double v0 = 0.0, i0 = 0.0, v1 = 0.0, i1 = 0.0;
+            const bool ok0 = commonSource({{"RDSMOD", 1.0}}, in, 0.0, v0, i0);
+            std::vector<KV> withR = {{"RDSMOD", 1.0}, {"RSH", 100.0}};
+            const bool ok1 = commonSource(withR, in, 0.0, v1, i1);
+            checkTrue("RDSMOD=1 converges with and without RSH",
+                      ok0 && ok1);
+            if (ok0 && ok1) {
+                const double want = (3.0 - v1) / 1e3 - v1 / 1e6;
+                checkTrue("KCL closes at the external drain node (RDSMOD=1)",
+                          std::abs(want - i1) < 1e-9);
+                checkTrue("series resistance reduces the drain current",
+                          i1 <= i0 + 1e-12 && std::abs(i1) > 1e-10);
+            }
+            double vg0 = 0.0, ig0 = 0.0;
+            const bool okg0 = commonSource({}, in, 0.0, vg0, ig0);
+            double vg = 0.0, ig = 0.0;
+            const bool okg = commonSource({{"RGATEMOD", 1.0}}, in, 0.0,
+                                          vg, ig);
+            checkTrue("RGATEMOD=1 converges (gate node not floating)", okg);
+            if (okg && okg0) {
+                checkTrue("RGATEMOD=1 leaves the drain current intact",
+                          std::abs(ig - ig0) < 1e-3 * std::abs(ig0));
+            }
+        }
+        ok = ok && (g_failures == 0);
     }
 
     if (master) {

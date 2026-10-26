@@ -146,6 +146,11 @@ public:
     double getDrainCurrent() const { return p_ * id_; }
     double getSourceCurrent() const { return p_ * is_; }
     double getBulkCurrent()  const { return p_ * ib_; }
+    // Nodal charges of the last evaluation (gate / drain / bulk).  Needed to
+    // check the C-V block (junction depletion, overlap, intrinsic charges).
+    double getChargeGate()  const { return p_ * qg_; }
+    double getChargeDrain() const { return p_ * qd_; }
+    double getChargeBulk()  const { return p_ * qb_; }
     double getTransconductance() const { return gm_; }
 
     /**
@@ -198,10 +203,21 @@ private:
     MosfetInstanceParams   inst_;
 
     // ---- BSIM4 internal-node layout ----
+    // Offsets into the extra-unknown block.  -1 means "no internal node",
+    // in which case the accessors below alias the external node row.
     int numInternal_ = 0;
     int offG_ = -1, offD_ = -1, offS_ = -1, offB_ = -1;
-    double rg_ = 0.0, rd_ = 0.0, rs_ = 0.0, rb_ = 0.0;
-    int patRd_ = -1, patRs_ = -1, patRg_ = -1, patRb_ = -1;  // slot base for each resistor
+    // Linear conductances stamped between the external and the intrinsic
+    // node (Siemens).  Xyce calls these sourceConductance/drainConductance
+    // and Rg; keeping them as CONDUCTANCES here matches the stamping
+    // g*(v_ext - v_int) and avoids the old resistance/conductance mix-up.
+    double gGate_ = 0.0, gDrain_ = 0.0, gSource_ = 0.0, gBody_ = 0.0;
+    // Body network (RBODYMOD 1): 5 resistors.  Each is a conductance (S).
+    double gRbdb_ = 0.0, gRbsb_ = 0.0, gRbpb_ = 0.0, gRbps_ = 0.0, gRbpd_ = 0.0;
+    // Fixed slot bases of each resistor quad inside jac_slots_.  The layout
+    // is card-fixed, so both registerJacobianPattern() and the loaders can
+    // read it without any map (same idea as Bjt's patRb_/patRc_/patRe_).
+    int patRd_ = -1, patRs_ = -1, patRg_ = -1, patRb_ = -1;
 
     // ---- internal/external row accessors ----
     int rowGi() const { return (offG_ >= 0) ? branch_index_ + offG_ : rowOf(nodes_[1]); }

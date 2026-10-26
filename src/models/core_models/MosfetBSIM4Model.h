@@ -35,7 +35,8 @@ struct MosfetBSIM4Thermal {
     double ni       = 0.0;   // intrinsic carrier concentration (T)
     double u0       = 0.0;   // zero-bias mobility (T)
     double vsat     = 0.0;   // saturation velocity (T)
-    double k1ox     = 0.0;   // body-effect coefficient (scaled)
+    double k1ox     = 0.0;   // body-effect coefficient (k1*toxe/toxm)
+    double k2ox     = 0.0;   // body-effect coefficient (k2*toxe/toxm)
     double kt1      = 0.0;   // Vth temperature coefficient
     double kt1l     = 0.0;
     double kt2      = 0.0;   // Vth temperature coefficient (Vb)
@@ -88,8 +89,24 @@ struct MosfetBSIM4Thermal {
     double wr       = 0.0;   // width offset (Rds)
 
     double gmin     = 1e-12; // parallel conductance
-    double isat     = 1e-14; // bulk saturation current (per area)
-    JunctionCap bulkCap;     // bulk junction C-V (per area)
+
+    // ---- bulk (source/drain) junctions, temperature scaled --------------
+    // Xyce updateTemperature4p82_ (N_DEV_MOSFET_B4p82.C:526-566) scales the
+    // saturation-current DENSITIES; the areas/perimeters come from the
+    // instance geometry (PAeffGeo, N_DEV_MOSFET_B4.C:8931).  Keeping them
+    // per unit area/length lets the device combine the bottom, sidewall and
+    // gate-edge terms exactly as Xyce does at B4p82.C:2445-2448.
+    struct Junction {
+        double isatArea = 1e-14;  // A/m^2   (JSS / JSD)
+        double isatSide = 0.0;    // A/m     (JSWS / JSWD)
+        double isatGate = 0.0;    // A/m     (JSWGS / JSWGD)
+        JunctionCap capArea;      // F/m^2   (CJS / CJD)
+        JunctionCap capSide;      // F/m     (CJSWD / CJSWGS)
+        JunctionCap capGate;      // F/m     (CJSWGD / CJSWGS)
+    };
+    Junction jctS, jctD;
+
+    double cox      = 0.0;   // gate oxide capacitance per unit area (F/m^2)
     double vcrit    = 0.5;   // PNJLIM critical voltage
 };
 
@@ -584,6 +601,16 @@ private:
     std::set<std::string> given_;
 
     void applyDefaults();
+    /**
+     * @brief K1/K2 from GAMMA1/GAMMA2 when the card gave neither.
+     *
+     * BSIM4 itself takes K1/K2 straight from the card (default 0), but a
+     * card that only describes the well through GAMMA1/GAMMA2 (or through
+     * NSUB/NDEP) would then have NO body effect at all, and the DC
+     * threshold, Abulk and the C-V block would each disagree.  Deriving
+     * them once here gives all three the same coefficient.
+     */
+    void deriveBodyEffectCoeffs();
     void checkAndFixVersion();
     bool processInstanceParams();
     void setupVersionPointers();

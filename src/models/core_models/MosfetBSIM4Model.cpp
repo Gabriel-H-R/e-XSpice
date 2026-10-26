@@ -342,6 +342,7 @@ MosfetBSIM4Model::MosfetBSIM4Model(std::string name, bool nmos)
         makeParam("VTL", &MosfetBSIM4Model::VTL, "Xyce B4.C:1217"),
         makeParam("LC", &MosfetBSIM4Model::LC, "Xyce B4.C:1223"),
         makeParam("XN", &MosfetBSIM4Model::XN, "Xyce B4.C:1228"),
+        makeParam("VFB", &MosfetBSIM4Model::VFB, "Xyce B4.C:1105"),
         makeParam("VFBSDOFF", &MosfetBSIM4Model::VFBSDOFF, "Xyce B4.C:1233"),
         makeParam("TVFBSDOFF", &MosfetBSIM4Model::TVFBSDOFF, "Xyce B4.C:1238"),
         makeParam("TVOFF", &MosfetBSIM4Model::TVOFF, "Xyce B4.C:1243"),
@@ -544,6 +545,37 @@ void MosfetBSIM4Model::clearTemperatureData() {
 void MosfetBSIM4Model::printOutInstances() {
     // Debug: print instance info. No-op in production.
 }
+void MosfetBSIM4Model::deriveBodyEffectCoeffs() {
+    if (isGiven("K1") || isGiven("K2")) return;
+
+    // Same construction the C-V block used to do on its own (see the old
+    // cvParams() in MosfetBSIM4Device.cpp): gamma1/gamma2 from the card, or
+    // from the doping when the card is silent.
+    const double coxe = EPSROX * 8.854214871e-12 / TOXE;
+
+    const double vtm0 = Const::KoverQ * TNOM;
+    const double ni = 1.45e10 * (TNOM / 300.15) * std::sqrt(TNOM / 300.15);
+    const double phi = vtm0 * std::log(NDEP / ni) + PHIN + 0.4;
+    const double sqrtPhi = std::sqrt(phi);
+
+    double vbx = isGiven("VBX") ? VBX : phi - 7.7348e-4 * NDEP * XT * XT;
+    if (vbx > 0.0) vbx = -vbx;
+    double vbm = VBM;
+    if (vbm > 0.0) vbm = -vbm;
+
+    const double gamma1 = isGiven("GAMMA1")
+        ? GAMMA1 : 5.753e-12 * std::sqrt(NDEP) / coxe;
+    const double gamma2 = isGiven("GAMMA2")
+        ? GAMMA2 : 5.753e-12 * std::sqrt(NSUB) / coxe;
+
+    const double T0 = gamma1 - gamma2;
+    const double T1 = std::sqrt(phi - vbx) - sqrtPhi;
+    const double T2 = std::sqrt(phi * (phi - vbm)) - phi;
+
+    K2 = T0 * T1 / (2.0 * T2 + vbm);
+    K1 = gamma2 - 2.0 * K2 * std::sqrt(phi - vbm);
+}
+
 void MosfetBSIM4Model::applyDefaults() {
     // Xyce Model::processParams4p82_ (N_DEV_MOSFET_B4p82.C:7808-8106): junction
     // clamps first, then defaults computed from other parameters, applied only
@@ -645,6 +677,10 @@ void MosfetBSIM4Model::applyDefaults() {
     if (!isGiven("VTSD")) VTSD = VTSS;
     if (!isGiven("VTSSWD")) VTSSWD = VTSSWS;
     if (!isGiven("VTSSWGD")) VTSSWGD = VTSSWGS;
+
+    // K1/K2 must exist before anything reads them: the DC threshold, Abulk
+    // and the C-V block all use the same pair (they used to disagree).
+    deriveBodyEffectCoeffs();
 }
 
 bool MosfetBSIM4Model::processParams(std::string& message) {
@@ -691,13 +727,22 @@ MosfetBSIM4Thermal MosfetBSIM4Model::scaleTo(double Temp) const {
                     (1.0 / 300.15 - 1.0 / Temp));
 
     // Zero-bias mobility (temperature dependence via UTE).
-    t.u0 = U0 * std::pow(TRatio, -UTE);
+    // Xyce B4p82.C:1615: u0temp = u0 * pow(TRatio, ute) — POSITIVE exponent.
+    t.u0 = U0 * std::pow(TRatio, UTE);
+
+    // Gate oxide capacitance per unit area (Xyce model_.coxe, B4p82.C:461).
+    t.cox = EPSROX * 8.854214871e-12 / TOXE;
 
     // Saturation velocity (temperature dependence).
     t.vsat = VSAT * (1.0 - 2.0e-3 * (Temp - 300.15));
 
-    // Body-effect coefficient scaled by TOX.
-    t.k1ox = GAMMA * TOX / (Const::KoverQ * Temp);
+    // Body-effect coefficients.  Xyce B4p82.C:1849 and 2156:
+    //   k1ox = k1 * toxe / toxm ,  k2ox = k2 * toxe / toxm
+    // The DC threshold, Abulk and the C-V block all read these, so they must
+    // come from ONE place (they used to disagree: DC read GAMMA, Abulk read
+    // K1).
+    t.k1ox = K1 * TOXE / TOXM;
+    t.k2ox = K2 * TOXE / TOXM;
 
     // Temperature coefficients for threshold (kept for compatibility).
     t.kt1 = 0.0;
@@ -718,6 +763,36 @@ MosfetBSIM4Thermal MosfetBSIM4Model::scaleTo(double Temp) const {
     t.dvt2w = DVT2W;
 
     t.gmin = GMIN;
+
+    // ---- bulk junctions: saturation current + C-V, temperature scaled ----
+    // Xyce updateTemperature4p82_ (N_DEV_MOSFET_B4p82.C:526-566).  The areas
+    // and perimeters are instance geometry (PAeffGeo) and are applied by the
+    // device, so these stay per unit area / per unit length.
+    const double Eg0nom = 1.16 - 7.02e-4 * TNOM * TNOM / (TNOM + 1108.0);
+    const double T0eg = Eg0nom / (Const::KoverQ * TNOM)
+                      - egfet / (Const::KoverQ * Temp);
+    const double lnT  = std::log(Temp / TNOM);
+    const double TjS  = std::exp((T0eg + NJS * lnT) / XTIS);
+    const double TjD  = std::exp((T0eg + NJD * lnT) / XTID);
+
+    t.jctS.isatArea = JSS  * TjS;
+    t.jctS.isatSide = JSWS * TjS;
+    t.jctS.isatGate = JSWGS* TjS;
+    t.jctD.isatArea = JSD  * TjD;
+    t.jctD.isatSide = JSWD * TjD;
+    t.jctD.isatGate = JSWGD* TjD;
+
+    t.jctS.capArea = scaleJunctionCap(PBS,    MJS,    FC, CJS,    Temp, TNOM);
+    t.jctS.capSide = scaleJunctionCap(PBSWS,  MJSWS,  FC, CJSWGS, Temp, TNOM);
+    t.jctS.capGate = scaleJunctionCap(PBSWGS, MJSWGS, FC, CJSWGD, Temp, TNOM);
+    t.jctD.capArea = scaleJunctionCap(PBD,    MJD,    FC, CJD,    Temp, TNOM);
+    t.jctD.capSide = scaleJunctionCap(PBSWD,  MJSWD,  FC, CJSWD,  Temp, TNOM);
+    t.jctD.capGate = scaleJunctionCap(PBSWGD, MJSWGD, FC, CJSWGD, Temp, TNOM);
+
+    // PNJLIM critical voltage (Xyce model_.vcrit, B4p82.C:493).
+    const double vt0 = Const::KoverQ * 300.15;
+    t.vcrit = vt0 * std::log(vt0 / (Const::Root2 * 1.0e-14));
+
     return t;
 }
 
