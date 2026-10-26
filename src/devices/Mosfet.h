@@ -90,8 +90,8 @@ public:
     // ---------------------------------------------------------------
     // Setup
     // ---------------------------------------------------------------
-    int numExtraUnknowns() const override { return 0; }
-    int numSolutionVariables() const override { return 4; }
+    int numExtraUnknowns() const override { return numInternal_; }
+    int numSolutionVariables() const override { return 4 + numInternal_; }
     int numStateVariables() const override { return 3; }
     int registerStates(StateStore& store) override;
 
@@ -196,6 +196,19 @@ public:
 private:
     RCP<const DeviceModel> model_;
     MosfetInstanceParams   inst_;
+
+    // ---- BSIM4 internal-node layout ----
+    int numInternal_ = 0;
+    int offG_ = -1, offD_ = -1, offS_ = -1, offB_ = -1;
+    double rg_ = 0.0, rd_ = 0.0, rs_ = 0.0, rb_ = 0.0;
+    int patRd_ = -1, patRs_ = -1, patRg_ = -1, patRb_ = -1;  // slot base for each resistor
+
+    // ---- internal/external row accessors ----
+    int rowGi() const { return (offG_ >= 0) ? branch_index_ + offG_ : rowOf(nodes_[1]); }
+    int rowDi() const { return (offD_ >= 0) ? branch_index_ + offD_ : rowOf(nodes_[0]); }
+    int rowSi() const { return (offS_ >= 0) ? branch_index_ + offS_ : rowOf(nodes_[2]); }
+    int rowBi() const { return (offB_ >= 0) ? branch_index_ + offB_ : rowOf(nodes_[3]); }
+
 
     // BSIM4 support: shared card + device evaluator (null when the card is
     // the level-1 Shichman-Hodges model).

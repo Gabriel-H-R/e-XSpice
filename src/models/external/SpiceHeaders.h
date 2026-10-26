@@ -46,9 +46,9 @@ extern "C" {
 int NIintegrate(void *ckt, double *geq, double *ceq,
                 double cf, int state);
 
-/* DEVpnjlim: SPICE PNJLIM diode limiting function (stub). */
-int DEVpnjlim(double vnew, double vold, double vt, double vcrit,
-              double *vlimited);
+/* DEVpnjlim: SPICE PNJLIM diode limiting function. */
+double DEVpnjlim(double vnew, double vold, double vt, double vcrit,
+                 int *icheck);
 
 /* BSIM4PAeffGeo / BSIM4RdseffGeo: geometry effect functions (stubs —
  * level-2 subset doesn't model geometry/proximity effects). */

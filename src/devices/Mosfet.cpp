@@ -52,6 +52,13 @@ Mosfet::Mosfet(const std::string& name,
     }
     if (inst_.W <= 0.0 || inst_.L <= 0.0) {
         throw std::invalid_argument("MOSFET W and L must be positive");
+    // Binning range check (Xyce N_DEV_MOSFET_B4.C)
+    if (bsim4Model_) {
+        if (bsim4Model_->LMIN > 0 && inst_.L < bsim4Model_->LMIN) throw std::invalid_argument("L out of binning range");
+        if (bsim4Model_->LMAX > 0 && inst_.L > bsim4Model_->LMAX) throw std::invalid_argument("L out of binning range");
+        if (bsim4Model_->WMIN > 0 && inst_.W < bsim4Model_->WMIN) throw std::invalid_argument("W out of binning range");
+        if (bsim4Model_->WMAX > 0 && inst_.W > bsim4Model_->WMAX) throw std::invalid_argument("W out of binning range");
+    }
     }
     if (inst_.M <= 0.0) {
         throw std::invalid_argument("MOSFET M must be positive");
@@ -86,7 +93,10 @@ Mosfet::Mosfet(const std::string& name,
             // Reference C++ implementation.
             bsim4Device_ = new MosfetBSIM4Device(bsim4Model_,
                                                  inst_.W, inst_.L, inst_.M,
-                                                 inst_.M);
+                                                 inst_.M,  // AREA
+                                                 inst_.SA, inst_.SB, inst_.SD,
+                                                 inst_.SCA, inst_.SCB, inst_.SCC,
+                                                 inst_.SC);
             bsim4Device_->setPolarity(bsim4Model_->isNmos() ? 1 : -1);
             if (inst_.TEMPGiven) {
                 ownThermalBSIM4_ = bsim4Model_->computeThermal(inst_.TEMP + inst_.DTEMP);
@@ -127,6 +137,18 @@ Mosfet::Mosfet(const std::string& name,
         cgso_ = level1Model()->CGSO * inst_.W * inst_.M;
         cgdo_ = level1Model()->CGDO * inst_.W * inst_.M;
         cgbo_ = level1Model()->CGBO * leff_ * inst_.M;
+    }
+
+    // ---- BSIM4 internal-node layout (rgate/rbody/rds) ----
+    if (bsim4Model_) {
+        int rgatemod = (inst_.RGATEMOD > 0) ? inst_.RGATEMOD : bsim4Model_->RGATEMOD;
+        int rdsmod = bsim4Model_->RDSMOD;
+        int rbodymod = (inst_.RBODYMOD > 0) ? inst_.RBODYMOD : bsim4Model_->RBODYMOD;
+        if (rgatemod > 0) { offG_ = numInternal_++; }
+        if (rdsmod > 0) { offD_ = numInternal_++; offS_ = numInternal_++; }
+        if (rbodymod > 0) { offB_ = numInternal_++; }
+        if (offS_ >= 0) rs_ = (inst_.NRS > 0) ? (bsim4Model_->RDSW * inst_.NRS / (inst_.W * inst_.NF)) : 1e6;
+        if (offB_ >= 0) rb_ = (bsim4Model_->RBODYMOD > 0) ? (1.0 / (bsim4Model_->RSH * inst_.NF)) : 1e6;
     }
 
     nodes_.push_back(drain);   // 0
@@ -208,16 +230,67 @@ int Mosfet::registerStates(StateStore& store) {
     setStateIndex(store.registerStates(3));   // Qg, Qd, Qb
     return 3;
 }
-
 void Mosfet::registerJacobianPattern(std::vector<int>& rows,
                                      std::vector<int>& cols) const {
-    // Full 4×4 block, row-major (the F and Q stamps share it).
-    const int r[4] = {rowOf(nodes_[0]), rowOf(nodes_[1]),
-                      rowOf(nodes_[2]), rowOf(nodes_[3])};
+    const int re[4] = {rowOf(nodes_[0]), rowOf(nodes_[1]),
+                       rowOf(nodes_[2]), rowOf(nodes_[3])};
+    const int ri[4] = {rowDi(), rowGi(), rowSi(), rowBi()};
+
+    // Device Jacobian on intrinsic rows (4x4).
     for (int i = 0; i < 4; ++i) {
         for (int j = 0; j < 4; ++j) {
-            rows.push_back(r[i]);
-            cols.push_back(r[j]);
+            rows.push_back(ri[i]);
+            cols.push_back(ri[j]);
+        }
+    }
+
+    // Ohmic resistors (external <-> intrinsic): 4 entries each.
+    // Track slot base for each resistor.
+    int base = 16;
+    if (offD_ >= 0) {
+        const_cast<Mosfet*>(this)->patRd_ = base;
+        const int pairs[4][2] = {{re[0],re[0]},{re[0],ri[0]},{ri[0],re[0]},{ri[0],ri[0]}};
+        for (int k = 0; k < 4; ++k) {
+            if (pairs[k][0] >= 0 && pairs[k][1] >= 0) {
+                rows.push_back(pairs[k][0]);
+                cols.push_back(pairs[k][1]);
+                base++;
+            }
+        }
+        const_cast<Mosfet*>(this)->patRd_ = 16; // slot base in jac_slots_
+    }
+    if (offS_ >= 0) {
+        const_cast<Mosfet*>(this)->patRs_ = base;
+        const int pairs[4][2] = {{re[2],re[2]},{re[2],ri[2]},{ri[2],re[2]},{ri[2],ri[2]}};
+        for (int k = 0; k < 4; ++k) {
+            if (pairs[k][0] >= 0 && pairs[k][1] >= 0) {
+                rows.push_back(pairs[k][0]);
+                cols.push_back(pairs[k][1]);
+                base++;
+            }
+        }
+        const_cast<Mosfet*>(this)->patRs_ = (offD_ >= 0) ? 16 + 4 : 16; // approximate
+    }
+    if (offG_ >= 0) {
+        const_cast<Mosfet*>(this)->patRg_ = base;
+        const int pairs[4][2] = {{re[1],re[1]},{re[1],ri[1]},{ri[1],re[1]},{ri[1],ri[1]}};
+        for (int k = 0; k < 4; ++k) {
+            if (pairs[k][0] >= 0 && pairs[k][1] >= 0) {
+                rows.push_back(pairs[k][0]);
+                cols.push_back(pairs[k][1]);
+                base++;
+            }
+        }
+    }
+    if (offB_ >= 0) {
+        const_cast<Mosfet*>(this)->patRb_ = base;
+        const int pairs[4][2] = {{re[3],re[3]},{re[3],ri[3]},{ri[3],re[3]},{ri[3],ri[3]}};
+        for (int k = 0; k < 4; ++k) {
+            if (pairs[k][0] >= 0 && pairs[k][1] >= 0) {
+                rows.push_back(pairs[k][0]);
+                cols.push_back(pairs[k][1]);
+                base++;
+            }
         }
     }
 }
@@ -284,10 +357,10 @@ double Mosfet::clampStep(double vnew, double vold, double maxStep) {
 }
 
 void Mosfet::limitedVoltages(const DaeSolution& x, bool allow_limiting) const {
-    const int rd = rowOf(nodes_[0]);
-    const int rg = rowOf(nodes_[1]);
-    const int rs = rowOf(nodes_[2]);
-    const int rb = rowOf(nodes_[3]);
+    const int rd = rowDi();
+    const int rg = rowGi();
+    const int rs = rowSi();
+    const int rb = rowBi();
 
     const double vd = (rd >= 0) ? x.data()[rd] : 0.0;
     const double vg = (rg >= 0) ? x.data()[rg] : 0.0;
@@ -323,14 +396,7 @@ void Mosfet::limitedVoltages(const DaeSolution& x, bool allow_limiting) const {
     vgs_lim_ = vgs;
     vds_lim_ = vds;
     vbs_lim_ = vbs;
-
-    if (debug_) {
-        std::fprintf(stderr,
-                     "[MOS %s] lim vgs=%.6g vds=%.6g vbs=%.6g (lim=%d)\n",
-                     name_.c_str(), vgs, vds, vbs,
-                     static_cast<int>(limiting_active_));
     }
-}
 
 // ===============================================================
 // Evaluation
@@ -514,13 +580,39 @@ void Mosfet::loadF(const DaeSolution& x, double time,
     (void)time;
     // BSIM4 level-2 path with reference C++ device.
     if (bsim4Device_) {
-        const int r[4] = {rowOf(nodes_[0]), rowOf(nodes_[1]),
-                          rowOf(nodes_[2]), rowOf(nodes_[3])};
-        bsim4Device_->limitedVoltages(x, r[0], r[1], r[2], r[3], true);
+        // Intrinsic rows (alias externals when no internal nodes).
+        const int ri[4] = {rowDi(), rowGi(), rowSi(), rowBi()};
+        const int re[4] = {rowOf(nodes_[0]), rowOf(nodes_[1]), rowOf(nodes_[2]), rowOf(nodes_[3])};
+        bsim4Device_->limitedVoltages(x, ri[0], ri[1], ri[2], ri[3], true);
         bsim4Device_->evaluate(bsim4Device_->vgsLim(),
                                bsim4Device_->vdsLim(),
                                bsim4Device_->vbsLim());
-        bsim4Device_->loadF(F, r[0], r[1], r[2], r[3]);
+        bsim4Device_->loadF(F, ri[0], ri[1], ri[2], ri[3]);
+        // Ohmic resistors (external -> intrinsic): physical, no polarity.
+        if (false) {
+            const double vd_ext = (re[0] >= 0) ? x.data()[re[0]] : 0.0;
+            const double vd_int = (ri[0] >= 0) ? x.data()[ri[0]] : 0.0;
+            if (re[0] >= 0) F[re[0]] += rd_ * (vd_ext - vd_int);
+            if (ri[0] >= 0) F[ri[0]] += rd_ * (vd_int - vd_ext);
+        }
+        if (offS_ >= 0 && rs_ > 0.0) {
+            const double vs_ext = (re[2] >= 0) ? x.data()[re[2]] : 0.0;
+            const double vs_int = (ri[2] >= 0) ? x.data()[ri[2]] : 0.0;
+            if (re[2] >= 0) F[re[2]] += rs_ * (vs_ext - vs_int);
+            if (ri[2] >= 0) F[ri[2]] += rs_ * (vs_int - vs_ext);
+        }
+        if (offG_ >= 0 && rg_ > 0.0) {
+            const double vg_ext = (re[1] >= 0) ? x.data()[re[1]] : 0.0;
+            const double vg_int = (ri[1] >= 0) ? x.data()[ri[1]] : 0.0;
+            if (re[1] >= 0) F[re[1]] += rg_ * (vg_ext - vg_int);
+            if (ri[1] >= 0) F[ri[1]] += rg_ * (vg_int - vg_ext);
+        }
+        if (offB_ >= 0 && rb_ > 0.0) {
+            const double vb_ext = (re[3] >= 0) ? x.data()[re[3]] : 0.0;
+            const double vb_int = (ri[3] >= 0) ? x.data()[ri[3]] : 0.0;
+            if (re[3] >= 0) F[re[3]] += rb_ * (vb_ext - vb_int);
+            if (ri[3] >= 0) F[ri[3]] += rb_ * (vb_int - vb_ext);
+        }
         pullBSIM4();
         bsim4Device_->commitLimited();
         first_solve_ = false;
@@ -577,8 +669,8 @@ void Mosfet::loadF(const DaeSolution& x, double time,
 void Mosfet::applySolutionLimit(std::vector<double>& x) const {
     // BSIM4 path: the device owns the limited voltages and history.
     if (bsim4Device_) {
-        bsim4Device_->applySolutionLimit(x, rowOf(nodes_[0]), rowOf(nodes_[1]),
-                                         rowOf(nodes_[2]), rowOf(nodes_[3]), p_);
+        bsim4Device_->applySolutionLimit(x, rowDi(), rowGi(),
+                                         rowSi(), rowBi(), p_);
         return;
     }
     if (!limiting_active_) return;
@@ -605,13 +697,12 @@ void Mosfet::loadQ(const DaeSolution& x, double time,
     (void)time;
     // BSIM4 level-2 path with reference C++ device.
     if (bsim4Device_) {
-        const int r[4] = {rowOf(nodes_[0]), rowOf(nodes_[1]),
-                          rowOf(nodes_[2]), rowOf(nodes_[3])};
-        bsim4Device_->limitedVoltages(x, r[0], r[1], r[2], r[3], true);
+        const int ri[4] = {rowDi(), rowGi(), rowSi(), rowBi()};
+        bsim4Device_->limitedVoltages(x, ri[0], ri[1], ri[2], ri[3], true);
         bsim4Device_->evaluate(bsim4Device_->vgsLim(),
                                bsim4Device_->vdsLim(),
                                bsim4Device_->vbsLim());
-        bsim4Device_->loadQ(Q, r[0], r[1], r[2], r[3]);
+        bsim4Device_->loadQ(Q, ri[0], ri[1], ri[2], ri[3]);
         pullBSIM4();
         bsim4Device_->commitLimited();
         first_solve_ = false;
@@ -628,8 +719,6 @@ void Mosfet::loadQ(const DaeSolution& x, double time,
 
     const int r[4] = {rowOf(nodes_[0]), rowOf(nodes_[1]),
                       rowOf(nodes_[2]), rowOf(nodes_[3])};
-    // Qs is derived (charge conservation); only Qd/Qg/Qb are independent,
-    // but stamping all four keeps the pattern identical to the Jacobian.
     const double qv[4] = {qd_, qg_, -(qg_ + qd_ + qb_), qb_};
     for (int i = 0; i < 4; ++i) {
         if (r[i] >= 0) Q[r[i]] += p_ * qv[i];
@@ -641,7 +730,48 @@ void Mosfet::loadJacobianF(DaeMatrix& J, const DaeSolution& x,
     (void)x; (void)time;
     // BSIM4 level-2 path with reference C++ device.
     if (bsim4Device_) {
-        bsim4Device_->loadJacobianF(J, jac_slots_);
+        // Device Jacobian on intrinsic rows (first 16 slots).
+        std::vector<int> devSlots(jac_slots_.begin(), jac_slots_.begin() + 16);
+        bsim4Device_->loadJacobianF(J, devSlots);
+        // Ohmic resistor conductances.
+        int slotBase = 16;
+        if (false) {
+            // entries: (re,re), (re,ri), (ri,re), (ri,ri)
+            if (slotBase + 3 < (int)jac_slots_.size()) {
+                J.accumulateSlot(jac_slots_[slotBase+0], rd_);
+                J.accumulateSlot(jac_slots_[slotBase+1], -rd_);
+                J.accumulateSlot(jac_slots_[slotBase+2], -rd_);
+                J.accumulateSlot(jac_slots_[slotBase+3], rd_);
+            }
+            slotBase += 4;
+        }
+        if (offS_ >= 0 && rs_ > 0.0) {
+            if (slotBase + 3 < (int)jac_slots_.size()) {
+                J.accumulateSlot(jac_slots_[slotBase+0], rs_);
+                J.accumulateSlot(jac_slots_[slotBase+1], -rs_);
+                J.accumulateSlot(jac_slots_[slotBase+2], -rs_);
+                J.accumulateSlot(jac_slots_[slotBase+3], rs_);
+            }
+            slotBase += 4;
+        }
+        if (offG_ >= 0 && rg_ > 0.0) {
+            if (slotBase + 3 < (int)jac_slots_.size()) {
+                J.accumulateSlot(jac_slots_[slotBase+0], rg_);
+                J.accumulateSlot(jac_slots_[slotBase+1], -rg_);
+                J.accumulateSlot(jac_slots_[slotBase+2], -rg_);
+                J.accumulateSlot(jac_slots_[slotBase+3], rg_);
+            }
+            slotBase += 4;
+        }
+        if (offB_ >= 0 && rb_ > 0.0) {
+            if (slotBase + 3 < (int)jac_slots_.size()) {
+                J.accumulateSlot(jac_slots_[slotBase+0], rb_);
+                J.accumulateSlot(jac_slots_[slotBase+1], -rb_);
+                J.accumulateSlot(jac_slots_[slotBase+2], -rb_);
+                J.accumulateSlot(jac_slots_[slotBase+3], rb_);
+            }
+            slotBase += 4;
+        }
         return;
     }
     // BSIM4 level-2 path with Berkeley C kernel adapter.
@@ -661,7 +791,8 @@ void Mosfet::loadJacobianQ(DaeMatrix& J, const DaeSolution& x,
     (void)x; (void)time;
     // BSIM4 level-2 path with reference C++ device.
     if (bsim4Device_) {
-        bsim4Device_->loadJacobianQ(J, jac_slots_);
+        std::vector<int> devSlots(jac_slots_.begin(), jac_slots_.begin() + 16);
+        bsim4Device_->loadJacobianQ(J, devSlots);
         return;
     }
     // BSIM4 level-2 path with Berkeley C kernel adapter (no charge model).
@@ -674,8 +805,8 @@ void Mosfet::loadJacobianQ(DaeMatrix& J, const DaeSolution& x,
 void Mosfet::storeState(const DaeSolution& x, StateStore& store) const {
     // BSIM4 level-2 path with reference C++ device.
     if (bsim4Device_) {
-        bsim4Device_->limitedVoltages(x, rowOf(nodes_[0]), rowOf(nodes_[1]),
-                                    rowOf(nodes_[2]), rowOf(nodes_[3]),
+        bsim4Device_->limitedVoltages(x, rowDi(), rowGi(),
+                                    rowSi(), rowBi(),
                                     true);
         bsim4Device_->evaluate(bsim4Device_->vgsLim(),
                                bsim4Device_->vdsLim(),
@@ -703,10 +834,10 @@ void Mosfet::loadChargeHistory(const StateStore& store, double q_coeff,
 
     // BSIM4 level-2 path with reference C++ device.
     if (bsim4Device_) {
-        const int rd = rowOf(nodes_[0]);
-        const int rg = rowOf(nodes_[1]);
-        const int rs = rowOf(nodes_[2]);
-        const int rb = rowOf(nodes_[3]);
+        const int rd = rowDi();
+        const int rg = rowGi();
+        const int rs = rowSi();
+        const int rb = rowBi();
 
         const double qg = q_coeff * store.deviceQ(state_index_, 0) +
                           qdot_coeff * store.deviceQDot(state_index_, 0);
@@ -750,8 +881,8 @@ void Mosfet::refreshOutputs(const DaeSolution& x, double time) const {
     (void)time;
     // BSIM4 level-2 path with reference C++ device (no limiting on converged point).
     if (bsim4Device_) {
-        bsim4Device_->limitedVoltages(x, rowOf(nodes_[0]), rowOf(nodes_[1]),
-                                    rowOf(nodes_[2]), rowOf(nodes_[3]),
+        bsim4Device_->limitedVoltages(x, rowDi(), rowGi(),
+                                    rowSi(), rowBi(),
                                     false);
         bsim4Device_->evaluate(bsim4Device_->vgsLim(),
                                bsim4Device_->vdsLim(),
@@ -774,10 +905,10 @@ void Mosfet::refreshOutputs(const DaeSolution& x, double time) const {
     }
 
     // Final cache refresh from the converged solution (no limiting).
-    const int rd = rowOf(nodes_[0]);
-    const int rg = rowOf(nodes_[1]);
-    const int rs = rowOf(nodes_[2]);
-    const int rb = rowOf(nodes_[3]);
+    const int rd = rowDi();
+    const int rg = rowGi();
+    const int rs = rowSi();
+    const int rb = rowBi();
 
     const double vd = (rd >= 0) ? x.data()[rd] : 0.0;
     const double vg = (rg >= 0) ? x.data()[rg] : 0.0;
@@ -861,14 +992,48 @@ double Mosfet::getPower() const {
 void Mosfet::loadNoiseSources(const NoiseContext& ctx,
                               std::vector<NoiseSource>& out) const {
     const double gm = std::fabs(gm_);
-    if (!(gm > 0.0)) return;
-    NoiseSource s;
-    s.label = "thermal";
-    s.pos = rowOf(nodes_[0]);       // drain
-    s.neg = rowOf(nodes_[2]);       // source
-    s.psd_a2 = (8.0 / 3.0) * ctx.boltzmann * ctx.temperature * gm;
-    s.f_exponent = 0.0;
-    out.push_back(s);
+    // Thermal noise (drain-source)
+    if (gm > 0.0) {
+        NoiseSource s;
+        s.label = "thermal";
+        s.pos = rowOf(nodes_[0]);
+        s.neg = rowOf(nodes_[2]);
+        s.psd_a2 = (8.0 / 3.0) * ctx.boltzmann * ctx.temperature * gm;
+        s.f_exponent = 0.0;
+        out.push_back(s);
+    }
+
+    // Flicker (1/f) noise for BSIM4
+    if (isBSIM4() && bsim4Model_) {
+        double Id = std::fabs(getDrainCurrent());
+        if (Id > 0.0) {
+            NoiseSource f;
+            f.label = "flicker";
+            f.pos = rowOf(nodes_[0]);
+            f.neg = rowOf(nodes_[2]);
+            if (bsim4Model_->FNOIMOD == 0) {
+                // Simple: KF * Id^AF / (f^EF * Cox * L * W)
+                double psd = bsim4Model_->KF * std::pow(Id, bsim4Model_->AF);
+                f.psd_a2 = psd;
+                f.f_exponent = bsim4Model_->EF;
+            } else {
+                // BSIM4 flicker noise (NOIA/NOIB/NOIC)
+                double Leff = inst_.L - 2.0 * bsim4Model_->LD;
+                if (Leff <= 0) Leff = 1e-9;
+                double Cox = 3.9 * 8.854e-12 / bsim4Model_->TOX;
+                double Nl = Cox * (vgs_cached_ - vth_cached_) / 1.60219e-19;
+                if (Nl < 0) Nl = 0;
+                double nstar = 1e12;
+                double T1 = bsim4Model_->NOIA + bsim4Model_->NOIB / (Nl + nstar)
+                          + bsim4Model_->NOIC / ((Nl + nstar) * (Nl + nstar));
+                double psd = 1.38065e-23 * ctx.temperature * Id * Id / (Cox * Leff * inst_.W * inst_.M)
+                           * T1;
+                f.psd_a2 = psd;
+                f.f_exponent = 1.0; // 1/f
+            }
+            out.push_back(f);
+        }
+    }
 }
 
 } // namespace e_XSpice

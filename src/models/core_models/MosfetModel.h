@@ -92,9 +92,40 @@ struct MosfetInstanceParams {
     double M = 1.0;      // multiplicity (parallel devices)
     double AD = 0.0;     // drain diffusion area (m², documented/future)
     double AS = 0.0;     // source diffusion area (m², documented/future)
+    double NF = 1.0;     // number of fingers (Xyce NF)
+    double PD = 0.0;     // drain perimeter (m, Xyce PD)
+    double PS = 0.0;     // source perimeter (m, Xyce PS)
+    double NRD = 1.0;    // drain squares (Xyce NRD)
+    double NRS = 1.0;    // source squares (Xyce NRS)
+    double SA = 0.0;     // distance to STI, source side (Xyce SA)
+    double SB = 0.0;     // distance to STI, drain side (Xyce SB)
+    double SD = 0.0;     // distance to STI, end (Xyce SD; 2*DMCG if not given)
+    double SCA = 0.0;    // stress, source (Xyce SCA)
+    double SCB = 0.0;    // stress, drain (Xyce SCB)
+    double SCC = 0.0;    // stress, channel (Xyce SCC)
+    double SC = 0.0;     // stress, combined (Xyce SC)
     double TEMP = 0.0;   // instance temperature (Kelvin, when TEMPGiven)
     double DTEMP = 0.0;  // delta temperature (K)
     bool   TEMPGiven = false;
+    double RBDB = 0.0;     // body resistance (drain-bulk)
+    double RBSB = 0.0;     // body resistance (source-bulk)
+    double RBPB = 0.0;     // body resistance (bulk-bulk)
+    double RBPS = 0.0;     // body resistance (bulk-source)
+    double RBPD = 0.0;     // body resistance (bulk-drain)
+    double DELVTO = 0.0;   // zero-bias threshold voltage variation
+    double XGW = 0.0;      // distance from gate contact to device edge
+    int    NGCON = 1;      // number of gate contacts
+    double IC1 = 0.0;      // initial Vds
+    double IC2 = 0.0;      // initial Vgs
+    double IC3 = 0.0;      // initial Vbs
+    int    TRNQSMOD = 0;   // transient NQS model
+    int    ACNQSMOD = 0;   // AC NQS model
+    int    RBODYMOD = 0;   // body resistance model (instance-level)
+    int    RGATEMOD = 0;   // gate resistance model (instance-level)
+    int    GEOMOD = 0;     // geometry-dependent parasitics model
+    int    RGEOMOD = 0;    // S/D resistance and contact model
+    int    MIN = 0;        // minimize D or S
+    int    OFF = 0;        // device initially off
     int    useBerkeleyKernel = 0;  // use Berkeley C kernel via adapter (0/1)
 
     using Table = std::vector<TypedParamDesc<MosfetInstanceParams>>;
@@ -108,6 +139,18 @@ struct MosfetInstanceParams {
                       "drain diffusion area (m², future)"),
             makeParam("AS", &MosfetInstanceParams::AS,
                       "source diffusion area (m², future)"),
+            makeParam("NF", &MosfetInstanceParams::NF, "number of fingers"),
+            makeParam("PD", &MosfetInstanceParams::PD, "drain perimeter (m)"),
+            makeParam("PS", &MosfetInstanceParams::PS, "source perimeter (m)"),
+            makeParam("NRD", &MosfetInstanceParams::NRD, "drain squares"),
+            makeParam("NRS", &MosfetInstanceParams::NRS, "source squares"),
+            makeParam("SA", &MosfetInstanceParams::SA, "distance to STI (source)"),
+            makeParam("SB", &MosfetInstanceParams::SB, "distance to STI (drain)"),
+            makeParam("SD", &MosfetInstanceParams::SD, "distance to STI (end)"),
+            makeParam("SCA", &MosfetInstanceParams::SCA, "stress (source)"),
+            makeParam("SCB", &MosfetInstanceParams::SCB, "stress (drain)"),
+            makeParam("SCC", &MosfetInstanceParams::SCC, "stress (channel)"),
+            makeParam("SC", &MosfetInstanceParams::SC, "stress (combined)"),
             makeCelsiusParam("TEMP", &MosfetInstanceParams::TEMP,
                              "instance temperature",
                              [](MosfetInstanceParams& o) { o.TEMPGiven = true; }),
@@ -115,6 +158,25 @@ struct MosfetInstanceParams {
                       "delta temperature (K)"),
             makeIntParam("USEBERKELEYKERNEL", &MosfetInstanceParams::useBerkeleyKernel,
                          "use Berkeley C kernel via BSim4Adapter (0/1)"),
+            makeParam("RBDB", &MosfetInstanceParams::RBDB, "body resistance drain-bulk"),
+            makeParam("RBSB", &MosfetInstanceParams::RBSB, "body resistance source-bulk"),
+            makeParam("RBPB", &MosfetInstanceParams::RBPB, "body resistance bulk-bulk"),
+            makeParam("RBPS", &MosfetInstanceParams::RBPS, "body resistance bulk-source"),
+            makeParam("RBPD", &MosfetInstanceParams::RBPD, "body resistance bulk-drain"),
+            makeParam("DELVTO", &MosfetInstanceParams::DELVTO, "threshold voltage variation"),
+            makeParam("XGW", &MosfetInstanceParams::XGW, "gate contact distance"),
+            makeIntParam("NGCON", &MosfetInstanceParams::NGCON, "number of gate contacts"),
+            makeParam("IC1", &MosfetInstanceParams::IC1, "initial Vds"),
+            makeParam("IC2", &MosfetInstanceParams::IC2, "initial Vgs"),
+            makeParam("IC3", &MosfetInstanceParams::IC3, "initial Vbs"),
+            makeIntParam("TRNQSMOD", &MosfetInstanceParams::TRNQSMOD, "transient NQS model"),
+            makeIntParam("ACNQSMOD", &MosfetInstanceParams::ACNQSMOD, "AC NQS model"),
+            makeIntParam("RBODYMOD", &MosfetInstanceParams::RBODYMOD, "body resistance model"),
+            makeIntParam("RGATEMOD", &MosfetInstanceParams::RGATEMOD, "gate resistance model"),
+            makeIntParam("GEOMOD", &MosfetInstanceParams::GEOMOD, "geometry parasitics model"),
+            makeIntParam("RGEOMOD", &MosfetInstanceParams::RGEOMOD, "S/D resistance model"),
+            makeIntParam("MIN", &MosfetInstanceParams::MIN, "minimize D or S"),
+            makeIntParam("OFF", &MosfetInstanceParams::OFF, "device initially off"),
         };
         return t;
     }

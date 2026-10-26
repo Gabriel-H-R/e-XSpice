@@ -49,10 +49,25 @@ int NIintegrate(void * /*ckt*/, double * /*geq*/, double * /*ceq*/,
     return 0;  // no charge modeling in level-2 subset
 }
 
-int DEVpnjlim(double vnew, double vold, double vt,
-              double vcrit, double *vlimited) {
-    *vlimited = vnew;  // no limiting in level-2 subset
-    return 0;
+double DEVpnjlim(double vnew, double vold, double vt,
+                 double vcrit, int *icheck) {
+    double arg;
+    if ((vnew > vcrit) && (fabs(vnew - vold) > (vt + vt))) {
+        if (vold > 0) {
+            arg = 1.0 + (vnew - vold) / vt;
+            if (arg > 0) {
+                vnew = vold + vt * log(arg);
+            } else {
+                vnew = vcrit;
+            }
+        } else {
+            vnew = vt * log(vnew / vt);
+        }
+        *icheck = 1;
+    } else {
+        *icheck = 0;
+    }
+    return vnew;
 }
 
 int BSIM4PAeffGeo(int /*nf*/, int /*geoMod*/, int /*min*/,
@@ -80,18 +95,61 @@ int BSIM4checkModel(BSIM4model * /*model*/,
     return OK;  // always OK
 }
 
-/* DEVfetlim / DEVlimvds: SPICE limiting functions (stubs —
- * level-2 subset handles limiting in the Mosfet wrapper). */
-int DEVfetlim(double /*vnew*/, double /*vold*/, double /*vt*/,
-              double /*vcrit*/, double *vlimited) {
-    *vlimited = 0.0;
-    return 0;
+/* DEVfetlim / DEVlimvds: SPICE limiting functions (from devsup.c). */
+double DEVfetlim(double vnew, double vold, double vto) {
+    double vtsthi, vtstlo, vtox, delv, vtemp;
+    vtsthi = fabs(2.0 * (vold - vto)) + 2.0;
+    vtstlo = vtsthi / 2.0 + 2.0;
+    vtox = vto + 3.5;
+    delv = vnew - vold;
+    if (vold >= vto) {
+        if (vold >= vtox) {
+            if (delv <= 0) {
+                if (vnew >= vtox) {
+                    if (-delv > vtstlo) vnew = vold - vtstlo;
+                } else {
+                    vnew = (vnew > vto + 2.0) ? vnew : (vto + 2.0);
+                }
+            } else {
+                if (delv >= vtsthi) vnew = vold + vtsthi;
+            }
+        } else {
+            if (delv <= 0) {
+                vnew = (vnew > vto - 0.5) ? vnew : (vto - 0.5);
+            } else {
+                vnew = (vnew < vto + 4.0) ? vnew : (vto + 4.0);
+            }
+        }
+    } else {
+        if (delv <= 0) {
+            if (-delv > vtsthi) vnew = vold - vtsthi;
+        } else {
+            vtemp = vto + 0.5;
+            if (vnew <= vtemp) {
+                if (delv > vtstlo) vnew = vold + vtstlo;
+            } else {
+                vnew = vtemp;
+            }
+        }
+    }
+    return vnew;
 }
 
-int DEVlimvds(double /*vnew*/, double /*vold*/, double /*vt*/,
-              double /*vcrit*/, double *vlimited) {
-    *vlimited = 0.0;
-    return 0;
+double DEVlimvds(double vnew, double vold) {
+    if (vold >= 3.5) {
+        if (vnew > vold) {
+            vnew = (vnew < (3.0 * vold + 2.0)) ? vnew : (3.0 * vold + 2.0);
+        } else {
+            if (vnew < 3.5) vnew = (vnew > 2.0) ? vnew : 2.0;
+        }
+    } else {
+        if (vnew > vold) {
+            vnew = (vnew < 4.0) ? vnew : 4.0;
+        } else {
+            vnew = (vnew > -0.5) ? vnew : -0.5;
+        }
+    }
+    return vnew;
 }
 
 static struct SPfrontEnd kSpFrontEndStub = {nullptr, nullptr};

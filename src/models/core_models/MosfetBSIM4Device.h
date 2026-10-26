@@ -16,7 +16,8 @@
  *   - Drain current: Ids = beta * Vgsteff^2 / ... (simplified)
  *   - Output conductance (LAMBDA)
  *   - Bulk diodes (SPICE3)
- *   - Meyer charges (simplified Meyer partition for BSIM4)
+ *   - Charge-thickness model (capMod 1/2, Xyce C-V block) with overlap and
+ *     junction charges; capacitances are central differences of the charges
  *
  * Not implemented (roadmap): pocket implant, NQS, gate current,
  * substrate current, AC-only parameters, noise.
@@ -49,10 +50,10 @@ public:
      * @param inst   Per-instance parameters (W, L, M, etc.)
      */
     MosfetBSIM4Device(RCP<const MosfetBSIM4Model> model,
-                      double W, double L, double M, double AREA);
-
-    ~MosfetBSIM4Device() = default;
-
+                      double W, double L, double M, double AREA,
+                      double SA = 0.0, double SB = 0.0, double SD = 0.0,
+                      double SCA = 0.0, double SCB = 0.0, double SCC = 0.0,
+                      double SC = 0.0);
     // Set by the Mosfet wrapper after construction.
     void setPolarity(int p) { p_ = p; }
     void setThermal(const MosfetBSIM4Thermal* t) { thermal_ = t; }
@@ -68,6 +69,13 @@ public:
      * @param vbs  bulk-source voltage (N-oriented)
      */
     void evaluate(double vgs, double vds, double vbs);
+    void applyScale(double lengthScale);
+    void setIC(double icVDS, double icVGS, double icVBS);
+    double eval1ovFNoise(double vds, double freq, double temp) const;
+    int getNumNoiseSources() const;
+    void updatePrimaryState();
+    void auxChargeCalculations();
+    void setupCapacitors();
 
     /**
      * @brief Reads raw terminal voltages from the solution, applies
@@ -143,11 +151,14 @@ public:
     double getChargeG() const { return qg_; }
     double getChargeD() const { return qd_; }
     double getChargeB() const { return qb_; }
+    double getChargeDef() const { return qdef_; }
     bool inSaturation() const { return saturated_; }
 
 private:
     RCP<const MosfetBSIM4Model> model_;
     double W_ = 0.0, L_ = 0.0, M_ = 1.0, AREA_ = 1.0;
+    double SA_ = 0.0, SB_ = 0.0, SD_ = 0.0;
+    double SCA_ = 0.0, SCB_ = 0.0, SCC_ = 0.0, SC_ = 0.0;
 
     // Polarity multiplier: +1 NMOS, −1 PMOS (set by Mosfet wrapper).
     int p_ = 1;
@@ -169,22 +180,24 @@ private:
     mutable double vbs_lim_ = 0.0;
 
     // Terminal currents, N-oriented (positive INTO the device).
-    mutable double id_ = 0.0, is_ = 0.0, ib_ = 0.0;
+    mutable double id_ = 0.0, is_ = 0.0, ib_ = 0.0, ig_ = 0.0;
 
     // Nodal charges, N-oriented physical frame.
-    mutable double qg_ = 0.0, qd_ = 0.0, qb_ = 0.0;
+    mutable double qg_ = 0.0, qd_ = 0.0, qb_ = 0.0, qdef_ = 0.0;  // qdef for NQS
 
     // Channel derivatives (effective frame): gm/dId/dvgs, gds, gmbs.
     mutable double gm_ = 0.0, gds_ = 0.0, gmbs_ = 0.0;
+    // Bulk-diode conductances (physical frame), for Jacobian consistency.
+    mutable double gibs_ = 0.0, gibd_ = 0.0;
 
-    // Capacitances (dQ/dV)
-    mutable double cgs_ = 0.0, cgd_ = 0.0, cgb_ = 0.0;
-    mutable double cdg_ = 0.0, cdd_ = 0.0, cdb_ = 0.0;
-    mutable double csg_ = 0.0, csd_ = 0.0, css_ = 0.0, csb_ = 0.0;
-    mutable double cbg_ = 0.0, cbd_ = 0.0, cbs_ = 0.0, cbb_ = 0.0;
+    // Charge Jacobian dQ/d(vgs,vds,vbs) of the N-oriented node charges
+    // (rows: drain, gate, bulk), by central differences in evaluate().
+    mutable double cq_[3][3] = {{0.0, 0.0, 0.0}, {0.0, 0.0, 0.0},
+                                {0.0, 0.0, 0.0}};
 
     mutable bool limiting_active_ = false;
     mutable bool first_solve_ = true;
+    mutable bool computing_derivatives_ = false;
     // PNJLIM history (N-oriented bulk voltages) + step-clamp history.
     mutable double vbs_prev_ = 0.0;
     mutable double vbd_prev_ = 0.0;
@@ -196,6 +209,10 @@ private:
 
     static double pnjlim(double vnew, double vold, double vt, double vcrit);
     static double clampStep(double vnew, double vold, double maxStep);
+
+    // Operating point and terminal charges at one bias (no Jacobian). The
+    // flag suppresses the diagnostic dump for the probing evaluations.
+    void evaluateBase(double vgs, double vds, double vbs, bool probe);
 };
 
 } // namespace e_XSpice
