@@ -23,7 +23,7 @@ This project explores the intersection of numerical analysis, sparse matrix comp
 
 ---
 
-## ✨ Showcase
+## Showcase
 
 Every result below comes from a real CLI run on a small netlist, checked
 against a closed form whenever one exists. All of it is reproducible with
