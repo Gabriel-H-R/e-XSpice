@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="520" viewBox="0 0 960 520">
+<rect width="100%" height="100%" fill="white"/>
+<text x="480" y="34" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="#333">DC sensitivity of V(out) - divider</text>
+<line x1="302" y1="78" x2="302" y2="448" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="714" y1="78" x2="714" y2="448" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="96" y1="382.355" x2="920" y2="382.355" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="96" y1="263" x2="920" y2="263" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="96" y1="143.645" x2="920" y2="143.645" stroke="#e8e8e8" stroke-width="1"/>
+<rect x="96" y="78" width="824" height="370" fill="none" stroke="#333" stroke-width="1"/>
+<text x="302" y="468" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">R1:R</text>
+<text x="714" y="468" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">R2:R</text>
+<text x="86" y="386.355" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">-0.0002</text>
+<text x="86" y="267" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">0</text>
+<text x="86" y="147.645" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">0.0002</text>
+<line x1="96" y1="263" x2="920" y2="263" stroke="#999" stroke-width="1"/>
+<rect x="157.8" y="263" width="288.4" height="149.194" fill="#0b6e99" stroke="white" stroke-width="1"/>
+<text x="302" y="424.194" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" font-weight="normal" fill="#333">-0.00025</text>
+<rect x="569.8" y="113.806" width="288.4" height="149.194" fill="#0b6e99" stroke="white" stroke-width="1"/>
+<text x="714" y="107.806" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" font-weight="normal" fill="#333">0.00025</text>
+<rect x="760" y="55" width="14" height="10" fill="#0b6e99"/>
+<text x="782" y="64" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">sensitivity</text>
+<text x="22" y="263" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="14" fill="#333" transform="rotate(-90 22 263)">dV(out)/dR (1/ohm)</text>
+</svg>

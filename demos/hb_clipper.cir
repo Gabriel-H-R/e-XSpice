@@ -1,0 +1,19 @@
+* Demo: harmonic balance of a nonlinear diode clipper
+*
+*   .MODEL DMOD D(IS=1e-12 RS=0 N=1)
+*   V1 in 0 DC 0 SIN(0 0.5 1k 0 0 90) AC 0.5
+*   R1 in out 1k
+*   D1 out 0 DMOD
+*
+* The diode distorts the 1 kHz sine: the 3rd harmonic must appear.
+* One CSV row per harmonic (harmonic, frequency_hz, magnitudes, phases).
+*
+* Run:
+*   ./build/e-XSpice file demos/hb_clipper.cir hb_clipper.csv
+
+.MODEL DMOD D(IS=1e-12 RS=0 N=1)
+V1 in 0 DC 0 SIN(0 0.5 1k 0 0 90) AC 0.5
+R1 in out 1k
+D1 out 0 DMOD
+.HB 1k 3
+.END

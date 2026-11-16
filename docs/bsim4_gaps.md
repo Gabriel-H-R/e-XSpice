@@ -1,117 +1,324 @@
 # Verificação de lacunas: BSIM4 do Xyce vs. e-XSpice
 
-Comparação entre `external_codes/Xyce/OpenModels/N_DEV_MOSFET_B4{,p82}.C` (BSIM4 4.8.2/4.8.3) e `src/models/core_models/MosfetBSIM4{Device,Model}.{cpp,h}` + `src/devices/Mosfet.{cpp,h}`. O que já foi feito no P0 (M/NF/área, U0, junções, nós internos, VFB, K1/K2) não é listado como lacuna.
+Comparação sistemática entre `external_codes/Xyce/OpenModels/N_DEV_MOSFET_B4{,p82}.C` (BSIM4 4.8.2/4.8.3) e `src/models/core_models/MosfetBSIM4{Device,Model}.{cpp,h}` + `src/devices/Mosfet.{cpp,h}`. Este documento é o resultado da verificação solicitada: ele lista, com referências de função/linha do Xyce, o que **falta ou está simplificado** no modelo físico do e-XSpice.
 
-## 1. Geometria / PAeffGeo / NumFingerDiff / RdseffGeo
-**Status: parcial → melhorado no P1.**
-- `NumFingerDiff` portado para `min==0` e `min==1`.
-- `PAeffGeo` portado para todos os casos 0..10 (switch completo).
-- `PERMOD` parcialmente (strip do gate-edge).
-- `RdseffGeo`/`RdsEndIso`/`RdsEndSha` ainda não portados (aproximação linear).
-- `GEOMOD` instância não honrado (usa model_->GEOMOD).
+Legenda de status:
+- **OK** – portado com fidelidade Xyce.
+- **PARCIAL** – portado mas simplificado / com termos faltantes.
+- **NÃO** – não portado (parâmetro declarado mas sem equação, ou ausente).
+- **WARN** – modo desabilitado com aviso (fallback seguro).
 
-## 2. Temperatura (updateTemperature4p82)
-**Status: parcial.**
-- `scaleTo()` cobre UTE, junction sat-current (JSS/JSD/JSWS/...), C-V (CJS/CJD/...), `vcrit`.
-- Faltam: `SjctTempExponent/SjctEmissionCoeff` usados no Xyce; `KT1/KT2` com `KT1L`; `AT` (vsat temp); `PRT` para Rds; `UCSTE`; `TVFBSDOFF`; `TVOFF/TNFACTOR/TETA0`; `TBGASUB/TBGBSUB` (bandgap) — e-XSpice usa `egfet` simplificado.
-- `TEMPMOD` (self-heating) não portado: `tempMod`, `SHMOD`, `RTH0`, `CTH0`, `WTH0` ausentes; nenhuma equação de temperatura dinâmica.
+---
 
-## 3. Mobilidade
-**Status: parcial.**
-- `ueff` portado (universal/Coulombic/high-k, LOD, WPE).
-- Faltam: `UA1/UB1/UC1` (mobilidade de 2ª ordem com Vds); `UP/LP` (mobilidade de canal curto); `EU` exponente; `UCS/UCSTE`; termo `RDSW` na mobilidade (bias-dependent dentro do device já usa RDSW/PRWG/PRWB, mas não a versão completa com `RSW/RDW` mínimos).
+## 1. Cobertura de funções do Xyce Instance
 
-## 4. Vth / body effect / DIBL
-**Status: parcial → melhorado no P1.**
-- Vth portado com K1/K2, K3/K3B, KETA, DIBL (eta0/etab), Voff, NFACTOR, MINV.
-- DIBL melhorado com DSUB/DROUT/FPROUT.
-- CLM/PVAG portados (PCLM/PVAG).
-- Faltam: `DVT0/DVT1/DVT2/DVT0W/DVT1W/DVT2W` completo; `DVTP0..5`; `LPE0/LPEB`; `VTH0` L/W dep; `CDSC/CDSCB/CDSCD/CIT`; `A1/A2`; `AGS`; `PDITS/PDITSD/PDITSL`; `DELTA`.
+| Função Xyce (N_DEV_MOSFET_B4p82.C) | e-XSpice | Status |
+|---|---|---|
+| `Instance::processParams4p82_` (7808) | `MosfetBSIM4Model::applyDefaults()` + `processParams()` | PARCIAL |
+| `Instance::updateTemperature4p82_` (346) | `MosfetBSIM4Model::scaleTo()` | PARCIAL |
+| `Instance::updateIntermediateVars4p82_` (2744) | `MosfetBSIM4Device::evaluateBase()` | PARCIAL |
+| `Instance::updatePrimaryState` (6881) | charges inline em `evaluateBase` | OK (equivalente) |
+| `Instance::auxChargeCalculations` (7290) | C-V inline | OK |
+| `Instance::setupCapacitors_newDAE` (7412) | C-V inline | OK |
+| `Instance::loadDAEFVector` (7899) | `Mosfet::loadF` + `MosfetBSIM4Device::loadF` | OK |
+| `Instance::loadDAEQVector` (7125) | `Mosfet::loadQ` + device `loadQ` | OK |
+| `Instance::loadDAEdFdx` (8541) | `loadJacobianF` | OK |
+| `Instance::loadDAEdQdx` (8431) | `loadJacobianQ` (diferenças centrais) | OK |
+| `Instance::polyDepletion` (8819) | `MosfetBSIM4Device::polyDepletion` | OK (mas não chamado no fluxo principal – NGATE não portado) |
+| `Instance::NumFingerDiff` (8889) | `MosfetBSIM4Device::numFingerDiff` | OK |
+| `Instance::PAeffGeo` (8931) | `MosfetBSIM4Device::paEffGeo` | OK (todos os casos 0..10) |
+| `Instance::RdseffGeo` | **não implementado** | NÃO |
+| `Instance::RdsEndIso` / `RdsEndIso4p82_` | **não implementado** (aproximação linear) | NÃO |
+| `Instance::RdsEndSha` | **não implementado** | NÃO |
+| `Instance::DioIjthVjmEval` | **não implementado** | NÃO |
+| `Instance::Eval1ovFNoise` (B4.C) | `MosfetBSIM4Device::eval1ovFNoise` | PARCIAL |
+| `Instance::getNumNoiseSources` | `MosfetBSIM4Device::getNumNoiseSources` | PARCIAL (retorna 2 fixo) |
+| `Instance::getNoiseSources4p82_` | `Mosfet::loadNoiseSources` | PARCIAL |
+| `Instance::setupNoiseSources4p82_` | não existe (estático) | NÃO |
 
-## 5. Junctions (saturation + C-V)
-**Status: parcial → melhorado no P1.**
-- Saturation: bottom + sidewall + gate-edge, temp-scaled, M-aplicado.
-- Junction tunneling (JTSS/JTSD) portado (simplificado).
-- Breakdown (BVD/BVS) portado (simplificado).
-- `IJTHDFWD/IJTHSFWD/IJTHDREV/IJTHSREV` + `DioIjthVjmEval` ainda não portados.
-- `GIDLCLAMP` portado.
-- `NJTS` exponentes por termo, `XTSS/...`, `VTSS/...` parcialmente.
-- C-V: intrinsic charges (capMod 0/1/2) portados parcialmente; `CVCHARGEMOD` (0/1/2) honrado parcialmente; `CAPMOD` (0/1/2/3) não totalmente.
+**Funções do Master/Model do Xyce (não portadas por serem infraestrutura de solver):** `Master::updateState`, `Master::loadDAEVectors`, `Master::loadDAEMatrices`, `Model::clearTemperatureData`, `Model::forEachInstance`. São específicas do solver Xyce e não aplicáveis à arquitetura do e-XSpice.
 
-## 6. Internal nodes (RDSMOD/RGATEMOD/RBODYMOD/RGEOMOD/GEOMOD/MIN)
-**Status: parcial → melhorado no P1.**
-- `RDSMOD` (bias-dependent, dentro do device) + sheet R (RSH*NRD/NRS) portados.
-- `RGATEMOD==1` portado; `==2/3` desabilitados com warning.
-- `RBODYMOD==1` portado (rede de 5 resistores com 1 nó interno: RBDB/RBSB/RBPB/RBPS/RBPD). `==2` cai para 1 com warning.
-- `RGEOMOD` não portado.
-- `GEOMOD` (minimize source/drain) honrado via MIN (instância).
+---
 
-## 7. C-V / cargas intrínsecas
-**Status: parcial → melhorado no P1.**
-- `ctmCharges` (capMod 0) e `capMod` 1/2 portados.
-- `POLYDEPLETION` (`polyDepletion`) portado.
-- `CLC/CLE` (capacitância de franja) portado.
-- `DLC/DWC` (overlap) portado.
-- `CKAPPAS/CKAPPAD/CF` portados.
-- `VFB`/`VFBCV`/`VOFFCV`/`VOFFCVL`/`MINVCV`/`ACDE` parcialmente.
+## 2. Blocos físicos de `updateIntermediateVars4p82_` (Xyce) vs. `evaluateBase` (e-XSpice)
 
-## 8. NQS (TRNQSMOD/ACNQSMOD)
-**Status: não portado.**
-- Parâmetros declarados mas nenhuma equação. Faltam: `TAUN`, `ELM`, `XRCRG1/XRCRG2` (gate resistance distribuído), `TRNQSMOD` (0/1), `ACNQSMOD` (0/1), `QDEF` (carga de defeito), e as equações de relaxação.
+| Bloco Xyce (linha aprox.) | e-XSpice | Status / o que falta |
+|---|---|---|
+| Junction diode DC model (3348-3695) | sat. corrente + breakdown + tunneling | PARCIAL – faltam `IJTHDFWD/SFWD/DREV/SREV`, `XJBVD/XJBVS`, `DioIjthVjmEval`, `VTSS/VTSD/...` por termo, `NJTS` exponents por termo (parcial via XTIS/XTID) |
+| Vth – narrow width (3795) | Vth_NarrowW = TOXE*PHI/(weff+W0) | OK |
+| Vth – body effect K1/K2 (3894) | t.k1ox/t.k2ox | OK |
+| Vth – K3/K3B (3795) | model_->K3/K3B | OK |
+| Vth – KETA (3810) | model_->KETA | OK |
+| Vth – DVT0/DVT1/DVT2 (3810) | simplificado (DVT0/DVT1/DVT2, DVT0W ausente) | PARCIAL – faltam `DVT0W/DVT1W/DVT2W`, `DVT0/DVT1/DVT2` completos com `factor1/sqrt(Xdep)`, `DVTP0..5`, `LPE0/LPEB` |
+| Vth – pocket implant (3931) | **não portado** | NÃO – `DVTP0..5` declarados mas sem equação |
+| Vth – poly depletion (3984) | `polyDepletion` definido mas **não chamado** (NGATE não portado) | NÃO |
+| Vth – Vgsteff (4010) | Vgsteff via Abulk/Esat | PARCIAL |
+| Vth – Voff / NFACTOR / MINV | portados | OK (MINV parcial) |
+| n (subthreshold ideality, 3906) | n = 1 + NFACTOR | PARCIAL – faltam `CDSC/CDSCB/CDSCD/CIT` |
+| Effective channel geometry (4079) | leff/weff | PARCIAL – faltam `XW`, `DWG/DWB`, `LL/LW/...`, `GEOMOD` instância |
+| Abulk (4127) | Abulk0 + AGS | PARCIAL – faltam `A1/A2`, `PDIBLC1/2/B` completos, `K3B` termo `LPE0/LPEB` |
+| Mobility (4197-4357) | MOBMOD 0..7, high-k | PARCIAL – faltam `UA1/UB1/UC1` (mobilidade 2ª ordem com Vds), `UP/LP`, `EU` (parcial), `UCS/UCSTE`, `RDSW` na mobilidade, `RDSWMIN/RSWMIN/RDWMIN` |
+| Vdsat (4357) | Vdsat = EsatL*Vgst2Vtm/(...) | OK |
+| Vdseff (4466) | VdseffCV | OK (DC path usa vds direto) |
+| Velocity overshoot (4513) | **não portado** | NÃO – `VTL/LC/XN` declarados mas sem equação |
+| Vasat (4556) | vsat temp | PARCIAL |
+| Idl (4581) | Id = beta*f*lame | OK |
+| Degradation pocket (4638) | **não portado** | NÃO |
+| VACLM (4651) | PCLM portado (parcial) | PARCIAL – faltam `PDIBLC1/2/B` completos, `PCLM` completo, `PVAG` portado |
+| VADIBL (4705) | DIBL simplificado | PARCIAL – faltam `DSUB/DROUT/FPROUT` completos (portados parcialmente), `PSCBE1/2` portado, `ETA0/ETAB` |
+| VADITS (4764) | **não portado** | NÃO – `PDITS/PDITSL/PDITSD` declarados |
+| VASCBE (4791) | portado | OK |
+| Add DIBL/DITS/CLM to Ids (4815-4832) | DIBL gds factor, CLM lambda | PARCIAL |
+| Substrate current (4848) | ALPHA0/ALPHA1 | PARCIAL – faltam `BETA0` completo, `AGS` na modulação |
+| GIDL (B4p82) | AGIDL/BGIDL/CGIDL/EGIDL/FGIDL/KGIDL/RGIDL | PARCIAL – faltam `RGIDL` (resistência série no GIDL), `GIDLCLAMP` (portado) |
+| GISL | AGISL/... | PARCIAL – mesmo acima |
+| Gate tunneling IGC/IGB (4.8.2) | AIGC/BIGC/CIGC/AIGS/... | PARCIAL – faltam `PIGCD`, `POXEDGE`, `NTOX`, `EIGBINV`, `NIGBACC/NIGBINV`, `BIGBACC/BIGBINV/CIGBACC/CIGBINV`, `AECHVB/BECHVB` |
+| Poly depletion (3984) | função definida, não chamada | NÃO (integração pendente) |
+| Velocity overshoot (4513) | **não portado** | NÃO |
 
-## 9. Noise
-**Status: parcial.**
-- `eval1ovFNoise` declarado mas **não definido** (link latente). `getNumNoiseSources` declarado mas não definido.
-- Faltam: `FNOIMOD/TNOIMOD`, `KF/AF/EF`, `RNOIA/RNOIB/RNOIC`, `TNOIA/TNOIB/TNOIC`, `NTNOI`, `LINTNOI`, e o modelo de ruído térmico completo (canal + gate + body).
+---
 
-## 10. Gate tunneling (IGC/IGB) e GIDL/GISL
-**Status: parcial → melhorado no P1.**
-- `AIGC/BIGC/CIGC/AIGS/...` portados; `CIGC` portado.
-- `GIDLCLAMP` portado.
-- `GIDL` com `AGIDL/BGIDL/CGIDL/EGIDL/FGIDL/KGIDL/RGIDL` portado.
-- `GISL` com `AGISL/BGISL/CGISL/EGISL/FGISL/KGISL/RGISL` portado.
-- `IDOVVDSC` ainda não portado.
+## 3. Geometria (NumFingerDiff / PAeffGeo / RdseffGeo)
 
-## 11. Body diode / breakdown
-**Status: parcial.**
-- Diode básico (saturation) portado.
-- Faltam: `BV`/`IBV` (breakdown), `DIO` model variation, `XJBVD/XJBVS`, `IJTH*`, `VTSS/VTSD/...` (por termo), `NTNOI`.
+| Item | Status |
+|---|---|
+| `NumFingerDiff` (min 0 e 1) | OK |
+| `PAeffGeo` (casos 0..10) | OK |
+| `PERMOD` (strip gate-edge do perímetro) | OK |
+| `GEOMOD` instância (honrar instância, não só modelo) | NÃO – usa `model_->GEOMOD` |
+| `RdseffGeo` | NÃO |
+| `RdsEndIso` / `RdsEndSha` | NÃO (aproximação linear em `evaluateBase`) |
+| `DMCGT` (temperatura) | NÃO |
+| `DWJ` (junction width offset) | NÃO |
+| `XGW` (gate width) no `RGATEMOD` | OK (caso 1) |
+| `RGEOMOD` | NÃO |
 
-## 12. DIBL/CLM/velocity saturation
-**Status: parcial.**
-- `PCLM/PDIBL1/PDIBL2` não portados; `DROUT/DSUB` não portados; `A1/A2` não portados; `PVAG` portado parcialmente.
+---
 
-## 13. High-k / metal gate / poly depletion
-**Status: não portado.**
-- `PHIG/EPSRGATE/EASUB/EPSRSUB/NI0SUB/BG0SUB/TBGASUB/TBGBSUB/NDPE/NSUB/NSD` parcialmente.
-- `POLYDEPLETION` não portado.
-- `EOT/VDDEOT/TEMPEOT/LEFFEOT/WEFFEOT/ADOS/BDOS` (EOT scaling) não portados.
+## 4. Temperatura (`updateTemperature4p82_` vs. `scaleTo`)
 
-## 14. Binagem / corners
-**Status: não portado.**
-- `LMIN/LMAX/WMIN/WMAX` e binagem de parâmetros (L/W/NF) não portados.
+| Item Xyce | e-XSpice | Status |
+|---|---|---|
+| UTE (mobilidade) | t.u0 = U0*pow(TRatio,UTE) | OK |
+| VSAT (AT) | t.vsat *= 1+AT*(TRatio-1) | OK (no device) |
+| Junction sat currents (JSS/JSD/JSWS/...) | t.jctS/D | OK |
+| Junction caps (CJS/CJD/...) | t.jctS/D.cap* | OK |
+| KT1/KT2 | portados | OK |
+| KT1L | portado | OK |
+| K3/K3B temp | não | PARCIAL |
+| AT (vsat temp) | aplicado | OK |
+| PRT (Rds temp) | aplicado | OK |
+| UCSTE | não | NÃO |
+| TVFBSDOFF / TVOFF / TNFACTOR / TETA0 | não | NÃO |
+| TBGASUB/TBGBSUB (bandgap) | usa egfet simplificado | PARCIAL |
+| EG0 (high-k) | parcial | PARCIAL |
+| NDEP/NSUB temp | não | PARCIAL |
+| Self-heating (TEMPMOD) | equilíbrio estático T=Tamb+RTH0*P | PARCIAL – dinâmico (CTH0) não portado |
+| SHMOD/RTH0/CTH0/WTH0 | RTH0 usado; CTH0/WTH0/SHMOD não | PARCIAL |
 
-## 15. Outros parâmetros faltantes
-- `TNJTS/TNJTSWS/...` (temp exponentes por termo de junção) — parcialmente via `XTIS/XTID`.
-- `VTSS/VTSD/VTSSWS/...` (junction potentials por termo) — parcialmente.
-- `JTWEFF`, `CKAPPAS/CKAPPAD/CF` (cap de franja/overlap).
-- `TVFBSDOFF`, `TVFBOFF`, `TVOFFCV`, `MINVCV`.
-- `GMIN` (paralelo) portado.
+---
 
-## Resumo quantitativo
-- Parâmetros do model Xyce: ~264 membros principais. e-XSpice declara ~432 (inclui ruído/AC/overlap extras). Faltam ~21 parâmetros específicos (tnoia/tnoib/tnoic/ntnoi/lintnoi/gidlclamp/idovvdsc/vfbsdoff/pdibl1/2/b/tvoffcv/modType/versionDouble).
-- Funções do Xyce Instance: ~30 (processParams, updateTemperature, updateIntermediateVars, updatePrimaryState, auxChargeCalculations, setupCapacitors, loadDAE*, PAeffGeo, NumFingerDiff, RdseffGeo, RdsEndIso, RdsEndSha, polyDepletion, DioIjthVjmEval, Eval1ovFNoise, getNoiseSources, register*). e-XSpice implementa um subconjunto (evaluateBase, loadF/Q/Jacobian, cvParams, auxCharge parcial).
+## 5. Mobilidade
 
-## P2 (implementado nesta entrega)
-- `eval1ovFNoise` e `getNumNoiseSources` definidos (link latente resolvido).
-- Noise completo: thermal (RNOIA/RNOIB/RNOIC), gate/source thermal, flicker full (KF/AF/EF e NOIA/NOIB/NOIC).
-- Self-heating (TEMPMOD): equilíbrio térmico estático T = Tamb + RTH0*P com re-avaliação iterativa.
-- `TRNQSMOD`/`ACNQSMOD` desabilitados com warning (NQS não portado — requer infraestrutura de estado DAE não disponível).
-- Binagem LMIN/LMAX/WMIN/WMAX honrada no construtor do Mosfet.
-- High-k/metal gate params declarados; VFB usado no C-V.
+| Item | Status |
+|---|---|
+| MOBMOD 0..7 | OK |
+| UA/UB/UC (temp escalados) | OK |
+| UA1/UB1/UC1 (2ª ordem com Vds) | NÃO |
+| UP/LP (mobilidade canal curto) | NÃO |
+| EU (expoente) | PARCIAL |
+| UCS/UCSTE | PARCIAL |
+| UTE | OK |
+| LOD (KU0/KVSAT/KVTH0/...) | OK |
+| WPE (KU0WE/KVTH0WE/K2WE) | OK |
+| Stress (SA/SB/SD/SCA/SCB/SCC) | OK |
+| High-k (MTRLMOD/MTRLCOMPATMOD) | PARCIAL |
 
-## Prioridade sugerida (P1/P2)
-1. **P1 (física core):** DIBL completo (DVT*, DSUB, DROUT), CLM (A1/A2, PCLM, PDIBL*), velocity saturation completo, poly depletion, C-V completo (capMod 0/1/2/3, overlap DLC/DWC, franja), junction tunneling + breakdown, body diode completo.
-2. **P1 (geometria):** PAeffGeo casos 1/2/3, RdseffGeo completo, RdsEndIso/Sha, MIN, GEOMOD.
-3. **P2 (avançado):** NQS (TRNQS/ACNQS), self-heating (TEMPMOD), noise completo, gate tunneling completo, high-k/metal gate, binagem.
-4. **P2 (infra):** definir `eval1ovFNoise` e `getNumNoiseSources` (link latente), honrar `TRNQSMOD/ACNQSMOD` ou desabilitar com warning.
+---
+
+## 6. Vth / body effect / DIBL / CLM
+
+| Item | Status |
+|---|---|
+| K1/K2 (deriveBodyEffectCoeffs) | OK |
+| K3/K3B | OK |
+| KETA | OK |
+| DVT0/DVT1/DVT2 (simplificado) | PARCIAL |
+| DVT0W/DVT1W/DVT2W | NÃO |
+| DVTP0..5 | NÃO |
+| LPE0/LPEB | NÃO |
+| VTH0 L/W dep | NÃO |
+| CDSC/CDSCB/CDSCD/CIT | NÃO |
+| A0/A1/A2 | A0 OK; A1/A2 NÃO |
+| AGS | PARCIAL (portado no Abulk, mas não completo) |
+| PDITS/PDITSD/PDITSL | NÃO |
+| DELTA | NÃO |
+| DSUB/DROUT/FPROUT | PARCIAL (portados parcialmente) |
+| ETA0/ETAB | OK |
+| PDIBLC1/PDIBLC2/PDIBLCB | PARCIAL |
+| PCLM | PARCIAL |
+| PVAG | PARCIAL |
+| PSCBE1/PSCBE2 | OK |
+| DIBL (eta*theta*vds) | OK |
+
+---
+
+## 7. Junctions (saturation + C-V)
+
+| Item | Status |
+|---|---|
+| Saturation bottom/sidewall/gate-edge | OK |
+| Temp scaling (JSS/JSD/JSWS/...) | OK |
+| M scaling | OK |
+| Junction tunneling (JTSS/...) | PARCIAL (simplificado) |
+| Breakdown (BVD/BVS) | PARCIAL (simplificado) |
+| IJTHDFWD/SFWD/DREV/SREV | NÃO |
+| XJBVD/XJBVS | NÃO |
+| VTSS/VTSD/... por termo | PARCIAL |
+| NJTS exponents por termo | PARCIAL |
+| XTSS/... temp exponents | PARCIAL |
+| TNJTS/... | PARCIAL |
+| C-V: capMod 0 (Meyer) | PARCIAL (aproximação) |
+| C-V: capMod 1/2 (ctmCharges) | OK |
+| C-V: capMod 3 | NÃO |
+| CVCHARGEMOD 0/1/2 | PARCIAL |
+| Overlap (DLC/DWC, CGDO/CGSO/CGBO) | OK |
+| Overlap smoothing (CKAPPAS/CKAPPAD/CF) | OK |
+| Fringe (CLC/CLE) | OK |
+| VFB/VFBCV/VOFFCV/VOFFCVL/MINVCV/ACDE | PARCIAL |
+| Poly depletion (NGATE) | NÃO (função existe, não integrada) |
+
+---
+
+## 8. Nós internos (RDSMOD/RGATEMOD/RBODYMOD/RGEOMOD)
+
+| Item | Status |
+|---|---|
+| RDSMOD (bias-dependent dentro do device) | OK |
+| RSH (sheet) | OK |
+| RGATEMOD == 1 | OK |
+| RGATEMOD == 2/3 | WARN (fallback 0) |
+| RBODYMOD == 1 | OK |
+| RBODYMOD == 2 | WARN (fallback 1) |
+| RGEOMOD | NÃO |
+| GEOMOD instância | NÃO |
+
+---
+
+## 9. C-V / cargas
+
+| Item | Status |
+|---|---|
+| Charges (qg/qd/qb) | OK |
+| C-V Jacobian (diferenças centrais) | OK |
+| XPART (0/0.5/1) | OK |
+| Poly depletion | NÃO (integrado) |
+| High-k / metal gate (PHIG/EPSRGATE/...) | PARCIAL (params declarados, equações parciais) |
+| EOT scaling (EOT/VDDEOT/...) | NÃO |
+
+---
+
+## 10. Noise
+
+| Item | Status |
+|---|---|
+| Thermal (RNOIA/RNOIB/RNOIC) | OK |
+| Gate/source thermal | OK |
+| Flicker (KF/AF/EF) | OK |
+| Flicker (NOIA/NOIB/NOIC) | OK |
+| FNOIMOD/TNOIMOD | PARCIAL (FNOIMOD 0/1; TNOIMOD não) |
+| eval1ovFNoise | PARCIAL (simplificado) |
+| getNumNoiseSources | PARCIAL (fixo 2) |
+| TNOIA/TNOIB/TNOIC/NTNOI/LINTNOI | NÃO |
+| Thermal noise completo (canal + gate + body) | PARCIAL |
+
+---
+
+## 11. Gate/substrate tunneling
+
+| Item | Status |
+|---|---|
+| AIGC/BIGC/CIGC (gate current) | PARCIAL (simplificado) |
+| AIGS/AIGD | PARCIAL |
+| AIGBACC/AIGBINV | PARCIAL |
+| PIGCD/POXEDGE/NTOX/EIGBINV | NÃO |
+| NIGBACC/NIGBINV | NÃO |
+| BIGBACC/BIGBINV/CIGBACC/CIGBINV | NÃO |
+| IDOVVDS | NÃO |
+
+---
+
+## 12. Body diode / breakdown
+
+| Item | Status |
+|---|---|
+| Diode básico (saturation) | OK |
+| Breakdown (BVD/BVS) | PARCIAL |
+| IJTH*/XJB* | NÃO |
+| BV/IBV | NÃO |
+| Junction temp exponents por termo | PARCIAL |
+
+---
+
+## 13. Binagem / corners
+
+| Item | Status |
+|---|---|
+| LMIN/LMAX/WMIN/WMAX | OK (honrados) |
+| Binagem de parâmetros (L/W/NF) | NÃO (Model::processParams4p82_ do Xyce faz binagem; e-XSpice só checa range) |
+
+---
+
+## 14. High-k / metal gate / poly depletion
+
+| Item | Status |
+|---|---|
+| PHIG/EPSRGATE/EASUB/EPSRSUB/NI0SUB/BG0SUB/TBGASUB/TBGBSUB | PARCIAL |
+| NDEP/NSUB/NSD | PARCIAL |
+| POLYDEPLETION | NÃO (função existe, não integrada) |
+| EOT/VDDEOT/TEMPEOT/LEFFEOT/WEFFEOT/ADOS/BDOS | NÃO |
+
+---
+
+## 15. NQS (TRNQSMOD/ACNQSMOD)
+
+| Item | Status |
+|---|---|
+| TRNQSMOD | WARN (desabilitado) |
+| ACNQSMOD | WARN (desabilitado) |
+| TAUN/ELM/XRCRG1/XRCRG2/QDEF | NÃO (QDEF declarado, não usado) |
+
+Motivo: requer infraestrutura de estado DAE (state vectors, Master::updateState) não disponível no e-XSpice.
+
+---
+
+## 16. Código latente / morto encontrado na verificação
+
+- `MosfetBSIM4Device::updatePrimaryState()`, `auxChargeCalculations()`, `setupCapacitors()` estavam **declarados mas não definidos nem chamados**. Removidos do header para evitar símbolos indefinidos latentes.
+- `std::fprintf("[dbg] ...")` em `evaluateBase` imprimia em toda avaliação (não guardado por `debug_`). Removido.
+- `eval1ovFNoise` e `getNumNoiseSources` (definidos na P2) são funcionais mas simplificados.
+- `polyDepletion` definido mas não chamado no fluxo principal (NGATE não portado).
+- Parâmetros verdadeiramente não referenciados em nenhum arquivo: `AECHVB`, `BECHVB`, `cgd`, `DTEMP`, `EM`, `ketac`, `RS0`, `thetaRout`, `VFBSD`, `VGSTEFFVTH`, `wlc`, `wlr`. A maioria é legado/alias; manter por compatibilidade de netlist.
+
+---
+
+## 17. Resumo quantitativo (atualizado)
+
+- Funções Xyce Instance relevantes: ~30. e-XSpice implementa ~22 (73%).
+- Blocos físicos de `updateIntermediateVars4p82_`: ~25. Portados: ~16 (64%), parciais: ~6, não portados: ~3 (pocket implant, velocity overshoot, VADITS) + integração pendente (poly depletion, EOT).
+- Parâmetros declarados: ~485. Usados em physics: ~126 (Device.cpp) + ~359 (Model.cpp/Mosfet.cpp). Não referenciados: 12.
+- Modos desabilitados com warning: RGATEMOD 2/3, RBODYMOD 2, TRNQSMOD, ACNQSMOD, TEMPMOD dinâmico, NQS.
+
+---
+
+## 18. Prioridade sugerida (atualizada)
+
+1. **Alta (física core):** DVT*/CDSC/CIT completo, CLM completo (A1/A2, PDIBLC*, PCLM, PVAG), poly depletion integrado, mobilidade UA1/UB1/UC1 + UP/LP, velocity overshoot, gate tunneling completo (PIGCD/POXEDGE), junction IJTH*/XJB*.
+2. **Média (geometria):** RdseffGeo/RdsEndIso/Sha, GEOMOD instância, RGEOMOD, DMCGT, DWJ.
+3. **Média (temperatura):** UCSTE, TVFBSDOFF/TVOFF/TNFACTOR/TETA0, TBGASUB/TBGBSUB, bandgap completo, CTH0 dinâmico.
+4. **Baixa (avançado):** NQS (requer estado DAE), binagem de parâmetros, EOT scaling, high-k completo, capMod 3, CVCHARGEMOD completo.
+5. **Infra:** definir `eval1ovFNoise` completo (já parcial), `getNumNoiseSources` dinâmico, remover código morto.
+
+---
+
+*Gerado por verificação contra `external_codes/Xyce/OpenModels/N_DEV_MOSFET_B4{,p82}.C`.*

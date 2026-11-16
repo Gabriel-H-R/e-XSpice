@@ -1,0 +1,21 @@
+* Demo: diode clipper, transient response
+*
+* Two anti-parallel diodes clip the output near +/- Vf (~0.7 V).
+*
+*   V1 in 0 SIN(0 5 1k)
+*   R1 in out 1k
+*   D1 out 0 DMOD
+*   D2 0 out DMOD
+*
+* Run:
+*   ./build/e-XSpice file demos/clipper_tran.cir clipper_tran.csv
+
+.MODEL DMOD D (IS=1e-12 N=1)
+
+V1 in 0 SIN(0 5 1k)
+R1 in out 1k
+D1 out 0 DMOD
+D2 0 out DMOD
+
+.TRAN 5u 2m 0
+.END

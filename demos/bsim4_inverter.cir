@@ -1,0 +1,26 @@
+* Demo: CMOS inverter with BSIM4 MOSFETs (Berkeley level-14 kernel)
+*
+*   V1 VDD 0 DC 5
+*   Vin in 0 PULSE(0 5 1u 10n 10n 2u 4u)
+*   M1 out in 0 0 NMOS W=100u L=1u
+*   M2 out in VDD VDD PMOS W=200u L=1u
+*   R1 out 0 1meg
+*
+* Run:
+*   ./build/e-XSpice file demos/bsim4_inverter.cir bsim4_inverter.csv
+
+.MODEL NMOS NMOS2 (LEVEL=2 VTH0=0.4 KP=100e-6 LAMBDA=0.02 PHI=0.6 GAMMA=0.4 TOX=5e-9 LD=0.1e-6 U0=0.05 VSAT=8e4 UA=1e-9 UB=7.8e-19 UC=-4.9e-11 CGSO=0.5e-9 CGDO=0.5e-9 CGBO=0.0 IS=1e-14 PB=0.8 MJ=0.5 FC=0.5 CBD=1e-12 CBS=1e-12 TNOM=27 TEMP=27 GMIN=1e-12)
+
+.MODEL PMOS PMOS2 (LEVEL=2 VTH0=-0.4 KP=40e-6 LAMBDA=0.02 PHI=0.6 GAMMA=0.4 TOX=5e-9 LD=0.1e-6 U0=0.02 VSAT=8e4 UA=1e-9 UB=7.8e-19 UC=-4.9e-11 CGSO=0.5e-9 CGDO=0.5e-9 CGBO=0.0 IS=1e-14 PB=0.8 MJ=0.5 FC=0.5 CBD=1e-12 CBS=1e-12 TNOM=27 TEMP=27 GMIN=1e-12)
+
+V1 VDD 0 DC 5.0
+Vin in 0 PULSE(0 5 1u 10n 10n 2u 4u)
+
+M1 out in 0 0 NMOS W=100e-6 L=1e-6
+M2 out in VDD VDD PMOS W=200e-6 L=1e-6
+
+R1 out 0 1meg
+Cload out 0 100f
+
+.TRAN 20n 0.5m
+.END

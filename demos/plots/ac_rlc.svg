@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="520" viewBox="0 0 960 520">
+<rect width="100%" height="100%" fill="white"/>
+<text x="480" y="34" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="#333">Series RLC band-pass - f0 = 15.9 kHz, Q = 10</text>
+<line x1="96" y1="78" x2="96" y2="448" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="508" y1="78" x2="508" y2="448" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="920" y1="78" x2="920" y2="448" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="96" y1="374.822" x2="920" y2="374.822" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="96" y1="300.68" x2="920" y2="300.68" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="96" y1="226.539" x2="920" y2="226.539" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="96" y1="152.397" x2="920" y2="152.397" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="96" y1="78.256" x2="920" y2="78.256" stroke="#e8e8e8" stroke-width="1"/>
+<rect x="96" y="78" width="824" height="370" fill="none" stroke="#333" stroke-width="1"/>
+<text x="96" y="468" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">1000</text>
+<text x="508" y="468" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">10000</text>
+<text x="920" y="468" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">100000</text>
+<text x="86" y="378.822" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">2</text>
+<text x="86" y="304.68" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">4</text>
+<text x="86" y="230.539" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">6</text>
+<text x="86" y="156.397" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">8</text>
+<text x="86" y="82.256" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">10</text>
+<polyline fill="none" stroke="#0b6e99" stroke-width="2.2" points="96,411.746 104.24,411.732 112.48,411.717 120.72,411.7 128.96,411.681 137.2,411.66 145.44,411.638 153.68,411.613 161.92,411.586 170.16,411.556 178.4,411.523 186.64,411.487 194.88,411.448 203.12,411.404 211.36,411.356 219.6,411.304 227.84,411.246 236.08,411.182 244.32,411.112 252.56,411.035 260.8,410.951 269.04,410.857 277.28,410.754 285.52,410.641 293.76,410.515 302,410.377 310.24,410.224 318.48,410.056 326.72,409.869 334.96,409.662 343.2,409.432 351.44,409.178 359.68,408.895 367.92,408.58 376.16,408.229 384.4,407.837 392.64,407.398 400.88,406.907 409.12,406.355 417.36,405.732 425.6,405.028 433.84,404.23 442.08,403.321 450.32,402.282 458.56,401.086 466.8,399.704 475.04,398.095 483.28,396.206 491.52,393.968 499.76,391.289 508,388.039 516.24,384.033 524.48,379 532.72,372.524 540.96,363.93 549.2,352.066 557.44,334.789 565.68,307.74 573.92,261.094 582.16,174.053 590.4,78 598.64,176.407 606.88,281.28 615.12,335.887 623.36,366.512 631.6,385.621 639.84,398.535 648.08,407.779 656.32,414.685 664.56,420.016 672.8,424.237 681.04,427.647 689.28,430.449 697.52,432.781 705.76,434.746 714,436.416 722.24,437.848 730.48,439.085 738.72,440.159 746.96,441.097 755.2,441.919 763.44,442.644 771.68,443.285 779.92,443.853 788.16,444.358 796.4,444.808 804.64,445.211 812.88,445.571 821.12,445.894 829.36,446.184 837.6,446.445 845.84,446.68 854.08,446.892 862.32,447.084 870.56,447.257 878.8,447.413 887.04,447.555 895.28,447.683 903.52,447.799 911.76,447.904 920,448"/>
+<line x1="760" y1="64" x2="786" y2="64" stroke="#0b6e99" stroke-width="3"/>
+<text x="792" y="68" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">Vout_mag</text>
+<text x="508" y="504" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">Frequency (Hz)</text>
+<text x="22" y="263" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="14" fill="#333" transform="rotate(-90 22 263)">|V(out)| (V/V)</text>
+</svg>

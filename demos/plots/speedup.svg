@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="520" viewBox="0 0 960 520">
+<rect width="100%" height="100%" fill="white"/>
+<text x="480" y="34" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="#333">AC sweep scaling - 5001 frequencies, 202 unknowns</text>
+<line x1="164.667" y1="78" x2="164.667" y2="448" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="302" y1="78" x2="302" y2="448" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="439.333" y1="78" x2="439.333" y2="448" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="576.667" y1="78" x2="576.667" y2="448" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="714" y1="78" x2="714" y2="448" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="851.333" y1="78" x2="851.333" y2="448" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="96" y1="448" x2="920" y2="448" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="96" y1="317.938" x2="920" y2="317.938" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="96" y1="187.876" x2="920" y2="187.876" stroke="#e8e8e8" stroke-width="1"/>
+<rect x="96" y="78" width="824" height="370" fill="none" stroke="#333" stroke-width="1"/>
+<text x="164.667" y="468" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">1 thread</text>
+<text x="302" y="468" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">2 threads</text>
+<text x="439.333" y="468" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">4 threads</text>
+<text x="576.667" y="468" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">8 threads</text>
+<text x="714" y="468" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">MPI 2 ranks</text>
+<text x="851.333" y="468" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">MPI 4 ranks</text>
+<text x="86" y="452" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">0</text>
+<text x="86" y="321.938" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">0.5</text>
+<text x="86" y="191.876" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">1</text>
+<rect x="116.6" y="187.876" width="96.1333" height="260.124" fill="#0b6e99" stroke="white" stroke-width="1"/>
+<text x="164.667" y="181.876" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" font-weight="normal" fill="#333">1</text>
+<rect x="253.933" y="164.465" width="96.1333" height="283.535" fill="#0b6e99" stroke="white" stroke-width="1"/>
+<text x="302" y="158.465" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" font-weight="normal" fill="#333">1.09</text>
+<rect x="391.267" y="172.269" width="96.1333" height="275.731" fill="#0b6e99" stroke="white" stroke-width="1"/>
+<text x="439.333" y="166.269" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" font-weight="normal" fill="#333">1.06</text>
+<rect x="528.6" y="185.275" width="96.1333" height="262.725" fill="#0b6e99" stroke="white" stroke-width="1"/>
+<text x="576.667" y="179.275" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" font-weight="normal" fill="#333">1.01</text>
+<rect x="665.933" y="141.054" width="96.1333" height="306.946" fill="#0b6e99" stroke="white" stroke-width="1"/>
+<text x="714" y="135.054" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" font-weight="normal" fill="#333">1.18</text>
+<rect x="803.267" y="117.643" width="96.1333" height="330.357" fill="#0b6e99" stroke="white" stroke-width="1"/>
+<text x="851.333" y="111.643" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" font-weight="normal" fill="#333">1.27</text>
+<rect x="760" y="55" width="14" height="10" fill="#0b6e99"/>
+<text x="782" y="64" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">speedup</text>
+<text x="22" y="263" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="14" fill="#333" transform="rotate(-90 22 263)">Speedup (x)</text>
+</svg>

@@ -1,0 +1,21 @@
+* Demo: noise analysis of a resistive divider (exact closed form)
+*
+*   V1 in 0 DC 1        (an ideal source is a SHORT for noise)
+*   R1 in out 10k
+*   R2 out 0 10k
+*
+*   S_out(f) = (R1||R2)^2 * 4kT * (1/R1 + 1/R2) = 8.288035947e-17 V^2/Hz
+*   gain     = R2/(R1+R2) = 0.5
+*   S_in     = S_out/gain^2             = 3.315214378e-16 V^2/Hz
+*   (at T = 300.15 K)
+*
+* pts_per_summary=1 adds one CSV column per noise generator.
+*
+* Run:
+*   ./build/e-XSpice file demos/noise_divider.cir noise_divider.csv
+
+V1 in 0 DC 1
+R1 in out 10k
+R2 out 0 10k
+.NOISE V(out) V1 DEC 10 1 1e6 1
+.END

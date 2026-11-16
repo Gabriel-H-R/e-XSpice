@@ -1,0 +1,18 @@
+* Demo: DC sensitivity of a resistive divider (exact closed form)
+*
+*   V1 in 0 DC 1
+*   R1 in out 1k
+*   R2 out 0 1k
+*
+*   V(out) = V1*R2/(R1+R2) = 0.5 V
+*   d(V(out))/dR1 = -V1*R2/(R1+R2)^2 = -2.5e-4
+*   d(V(out))/dR2 = +V1*R1/(R1+R2)^2 = +2.5e-4
+*
+* Run:
+*   ./build/e-XSpice file demos/sens_divider.cir
+
+V1 in 0 DC 1
+R1 in out 1k
+R2 out 0 1k
+.SENS V(out) R1,R2
+.END

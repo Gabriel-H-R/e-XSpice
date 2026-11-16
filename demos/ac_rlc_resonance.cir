@@ -1,0 +1,21 @@
+* Demo: series RLC band-pass, output taken across C1
+*
+*   V1 in 0 AC 1
+*   L1 in mid 1m
+*   R1 mid out 10
+*   C1 out 0 100n
+*
+* Closed form:  H(s) = 1 / (1 + sRC + s^2 LC)
+*   f0 = 1/(2*pi*sqrt(L*C)) = 15.915 kHz   (the peak)
+*   Q  = sqrt(L/C)/R        = 10           (peak magnitude |H| = Q)
+*
+* Run:
+*   ./build/e-XSpice file demos/ac_rlc_resonance.cir ac_rlc.csv
+
+V1 in 0 AC 1
+L1 in mid 1m
+R1 mid out 10
+C1 out 0 100n
+
+.AC DEC 50 1k 100k
+.END

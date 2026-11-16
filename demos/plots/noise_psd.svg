@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="520" viewBox="0 0 960 520">
+<rect width="100%" height="100%" fill="white"/>
+<text x="480" y="34" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="#333">Output noise PSD - resistive divider</text>
+<line x1="96" y1="78" x2="96" y2="448" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="233.333" y1="78" x2="233.333" y2="448" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="370.667" y1="78" x2="370.667" y2="448" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="508" y1="78" x2="508" y2="448" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="645.333" y1="78" x2="645.333" y2="448" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="782.667" y1="78" x2="782.667" y2="448" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="920" y1="78" x2="920" y2="448" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="96" y1="374" x2="920" y2="374" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="96" y1="300" x2="920" y2="300" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="96" y1="226" x2="920" y2="226" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="96" y1="152" x2="920" y2="152" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="96" y1="78" x2="920" y2="78" stroke="#e8e8e8" stroke-width="1"/>
+<rect x="96" y="78" width="824" height="370" fill="none" stroke="#333" stroke-width="1"/>
+<text x="96" y="468" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">1</text>
+<text x="233.333" y="468" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">10</text>
+<text x="370.667" y="468" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">100</text>
+<text x="508" y="468" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">1000</text>
+<text x="645.333" y="468" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">10000</text>
+<text x="782.667" y="468" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">100000</text>
+<text x="920" y="468" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">1e+06</text>
+<text x="86" y="378" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">0.2</text>
+<text x="86" y="304" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">0.4</text>
+<text x="86" y="230" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">0.6</text>
+<text x="86" y="156" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">0.8</text>
+<text x="86" y="82" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">1</text>
+<polyline fill="none" stroke="#0b6e99" stroke-width="2.2" points="96,448 109.733,448 123.467,448 137.2,448 150.933,448 164.667,448 178.4,448 192.133,448 205.867,448 219.6,448 233.333,448 247.067,448 260.8,448 274.533,448 288.267,448 302,448 315.733,448 329.467,448 343.2,448 356.933,448 370.667,448 384.4,448 398.133,448 411.867,448 425.6,448 439.333,448 453.067,448 466.8,448 480.533,448 494.267,448 508,448 521.733,448 535.467,448 549.2,448 562.933,448 576.667,448 590.4,448 604.133,448 617.867,448 631.6,448 645.333,448 659.067,448 672.8,448 686.533,448 700.267,448 714,448 727.733,448 741.467,448 755.2,448 768.933,448 782.667,448 796.4,448 810.133,448 823.867,448 837.6,448 851.333,448 865.067,448 878.8,448 892.533,448 906.267,448 920,448"/>
+<line x1="760" y1="64" x2="786" y2="64" stroke="#0b6e99" stroke-width="3"/>
+<text x="792" y="68" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">onoise_psd_v2_per_hz</text>
+<text x="508" y="504" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">Frequency (Hz)</text>
+<text x="22" y="263" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="14" fill="#333" transform="rotate(-90 22 263)">S_out (V^2/Hz)</text>
+</svg>

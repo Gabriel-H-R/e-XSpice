@@ -1305,8 +1305,6 @@ void MosfetBSIM4Device::evaluateBase(double vgs, double vds, double vbs, bool pr
         }
     }
 
-    std::fprintf(stderr, "[dbg] Aseff=%.3g Adeff=%.3g Pseff=%.3g Pdeff=%.3g weffCJ=%.3g nf=%.3g\\n",
-                Aseff, Adeff, Pseff, Pdeff, weffCJ, nf);
     // ---- map channel to physical frame ----
     const double sid = sw ? -1.0 : 1.0;
     id_ = sid * Id + Ibd + Igidl;

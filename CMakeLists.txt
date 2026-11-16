@@ -183,6 +183,13 @@ target_link_libraries(e-XSpice
 
 
 # ============================================================
+# TOOLS
+# ============================================================
+
+add_executable(csv2svg tools/csv2svg.cpp)
+
+
+# ============================================================
 # BSIM4 PHYSICS KERNEL (Berkeley C, now always available)
 # ============================================================
 # The SPICE shim headers (src/models/external/SpiceHeaders.h) provide the
@@ -207,6 +214,7 @@ if(BUILD_TESTS)
     enable_testing()
 
     add_subdirectory(tests)
+    add_subdirectory(demos)
 
 endif()
 

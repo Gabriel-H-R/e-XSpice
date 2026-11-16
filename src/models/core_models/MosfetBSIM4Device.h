@@ -81,9 +81,8 @@ public:
     void setIC(double icVDS, double icVGS, double icVBS);
     double eval1ovFNoise(double vds, double freq, double temp) const;
     int getNumNoiseSources() const;
-    void updatePrimaryState();
-    void auxChargeCalculations();
-    void setupCapacitors();
+    // (updatePrimaryState/auxChargeCalculations/setupCapacitors are not part of
+    // the reference evaluation path; charges are computed inline in evaluateBase.)
 
     /**
      * @brief Reads raw terminal voltages from the solution, applies

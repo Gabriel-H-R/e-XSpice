@@ -20,3 +20,21 @@ bin/
 *.log
 # Saida padrao do executavel (artefato de execucao)
 simulation_output.csv
+out*.csv
+test_*.csv
+
+# Artefatos intermediarios de compilacao LaTeX (doc/mathematical/report)
+doc/**/*.aux
+doc/**/*.auxlock
+doc/**/*.fls
+doc/**/*.fdb_latexmk
+doc/**/*.lof
+doc/**/*.out
+doc/**/*.synctex.gz
+doc/**/*.toc
+doc/**/*.xdv
+doc/**/*.tdo
+doc/**/*-figure*.md5
+
+# Pasta de anotacoes temporarias
+temp/

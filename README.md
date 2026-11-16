@@ -11,6 +11,7 @@
 This project explores the intersection of numerical analysis, sparse matrix computation, and distributed systems, providing a foundation for modern Electronic Design Automation (EDA) tools.
 
 ## Table of Contents
+- [Showcase](#-showcase)
 - [Core Features](#-core-features)
 - [Mathematical Foundation (MNA)](#-mathematical-foundation-mna)
 - [Software Architecture](#-software-architecture)
@@ -19,6 +20,96 @@ This project explores the intersection of numerical analysis, sparse matrix comp
 - [Usage Examples](#-usage-examples)
 - [Parallelization Strategy](#-parallelization-strategy)
 - [Development Roadmap](#-development-roadmap)
+
+---
+
+## ✨ Showcase
+
+Every result below comes from a real CLI run on a small netlist, checked
+against a closed form whenever one exists. All of it is reproducible with
+`./demos/run_demos.sh` (or `demos/run_demos.ps1`); each demo is also a CTest
+case (`ctest -R Demo_`), so the showcase is verified in CI.
+
+### Exactness against theory
+
+| Quantity | Analysis | Theory | e-XSpice | Deviation |
+|---|---|---|---|---|
+| dV(out)/dR1 (divider) | `.SENS` | −2.5×10⁻⁴ | −2.500000000125×10⁻⁴ | 5×10⁻¹⁰ rel |
+| dV(out)/dR2 (divider) | `.SENS` | +2.5×10⁻⁴ | +2.499999999875×10⁻⁴ | 5×10⁻¹⁰ rel |
+| Worst \|H\| error, 101 frequencies | `.AC` | 1/(1+sRC+s²LC) | — | 1.5×10⁻¹⁵ rel |
+| Worst phase error | `.AC` | — | — | 1.1×10⁻¹³ deg |
+| Output noise PSD (divider) | `.NOISE` | 8.288035947×10⁻¹⁷ V²/Hz | 8.288035947×10⁻¹⁷ V²/Hz | <10⁻³¹ rel |
+| Integrated output noise | `.NOISE` | 9.10386×10⁻⁶ V rms | 9.10386×10⁻⁶ V rms | — |
+| RC step, worst sample error | `.TRAN` | 5·(1−e^(−t/RC)) | — | 2.5 mV (0.05 % FS) |
+
+### The analyses, in figures
+
+```mermaid
+flowchart LR
+    N[".cir netlist"] --> P["Parser"]
+    P --> C["Circuit + devices"]
+    C --> OP["DC operating point"]
+    OP --> L["One linearization G, C"]
+    L --> F["Complex LU per frequency"]
+    F --> O["CSV + log"]
+```
+
+**Small-signal AC — series RLC band-pass** (`demos/ac_rlc_resonance.cir`)
+
+![Series RLC band-pass](demos/plots/ac_rlc.svg)
+
+Peak at f₀ = 15.9 kHz with |H| = Q = 10; worst deviation from
+H(s) = 1/(1 + sRC + s²LC) over the sweep: 1.5×10⁻¹⁵.
+
+**Transient — diode clipper** (`demos/clipper_tran.cir`)
+
+![Diode clipper transient](demos/plots/clipper_tran.svg)
+
+**Harmonic balance — spectrum of the same nonlinearity** (`demos/hb_clipper.cir`)
+
+![Harmonic balance spectrum](demos/plots/hb_spectrum.svg)
+
+Fundamental 0.488 V, 3rd harmonic 9.2 mV (1.9 % distortion).
+
+**Noise — adjoint transfer with per-generator budget** (`demos/noise_divider.cir`)
+
+![Output noise PSD](demos/plots/noise_psd.svg)
+
+**BSIM4 CMOS inverter** (`demos/bsim4_inverter.cir`)
+
+![BSIM4 CMOS inverter transient](demos/plots/bsim4_inverter.svg)
+
+**DC sensitivity of a divider** (`demos/sens_divider.cir`)
+
+![DC sensitivity](demos/plots/sens_bar.svg)
+
+### Parallel frequency sweeps — and deterministic by construction
+
+The dense AC ladder (`demos/ac_ladder_200_freqpar.cir`) solves **5001
+frequencies** from a single linearization. Frequencies are independent, so
+the sweep splits across OpenMP threads or MPI ranks (`.OPTIONS ACFREQPAR`),
+and the CSV is **byte-identical** to the serial run for 1, 2 and 4 ranks.
+
+![AC sweep scaling](demos/plots/speedup.svg)
+
+Representative run on an Intel i5-9300HF (4 cores), CSV written to disk:
+
+| Config | Time | Speedup |
+|---|---|---|
+| 1 thread | 6.46 s | 1.00× |
+| 2 threads | 5.92 s | 1.09× |
+| 4 threads | 6.09 s | 1.06× |
+| 8 threads | 6.37 s | 1.01× |
+| MPI 2 ranks | 5.46 s | 1.18× |
+| MPI 4 ranks | 5.08 s | 1.27× |
+
+The benchmark prints the SHA-256 of every CSV: for this workload the output is
+**byte-identical between 1, 2 and 4 ranks** (the same guarantee the
+`AC_Netlist_MPI` / `AC_Netlist_FreqPar` CTest cases pin). Timings move with
+the CPU turbo/thermal state and the CSV/report path is single-threaded, so
+small sweeps do not benefit from extra ranks — the automatic thresholds keep
+the sequential path there. Reproduce with
+`powershell -ExecutionPolicy Bypass -File demos/benchmark_scaling.ps1`.
 
 ---
 
@@ -289,7 +380,10 @@ e-XSpice/
 │   ├── parallel/       # MPI communicator wrappers and OpenMP pragmas
 │   └── main.cpp        # CLI entry point
 ├── tests/              # CTest suite, incl. analytical physics verification
+├── demos/              # Runnable showcase circuits (+ CTest smoke cases),
+│                       #   run_demos scripts and README figures (SVG)
 ├── examples/           # Benchmark circuits and .cir netlists
+├── tools/              # csv2svg: dependency-free CSV -> SVG plotter
 └── CMakeLists.txt      # Main CMake configuration
 ---
 ```

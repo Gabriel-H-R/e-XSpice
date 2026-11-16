@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="520" viewBox="0 0 960 520">
+<rect width="100%" height="100%" fill="white"/>
+<text x="480" y="34" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="20" font-weight="bold" fill="#333">Diode clipper - transient</text>
+<line x1="96" y1="78" x2="96" y2="448" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="303.557" y1="78" x2="303.557" y2="448" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="511.113" y1="78" x2="511.113" y2="448" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="718.67" y1="78" x2="718.67" y2="448" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="96" y1="411.653" x2="920" y2="411.653" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="96" y1="337.508" x2="920" y2="337.508" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="96" y1="263.363" x2="920" y2="263.363" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="96" y1="189.218" x2="920" y2="189.218" stroke="#e8e8e8" stroke-width="1"/>
+<line x1="96" y1="115.073" x2="920" y2="115.073" stroke="#e8e8e8" stroke-width="1"/>
+<rect x="96" y="78" width="824" height="370" fill="none" stroke="#333" stroke-width="1"/>
+<text x="96" y="468" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">0</text>
+<text x="303.557" y="468" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">0.0005</text>
+<text x="511.113" y="468" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">0.001</text>
+<text x="718.67" y="468" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">0.0015</text>
+<text x="86" y="415.653" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">-4</text>
+<text x="86" y="341.508" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">-2</text>
+<text x="86" y="267.363" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">0</text>
+<text x="86" y="193.218" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">2</text>
+<text x="86" y="119.073" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">4</text>
+<polyline fill="none" stroke="#0b6e99" stroke-width="2.2" points="96,263.363 116.756,206.083 137.511,154.409 158.267,113.401 179.023,87.0723 199.778,78 220.534,87.0723 241.29,113.401 262.045,154.409 282.801,206.083 300.804,255.643 311.363,285.213 332.118,341.025 352.874,389.234 373.63,425.122 394.385,445.176 413.471,447.927 434.226,433.582 454.982,402.574 475.738,357.94 496.493,304.048 510.355,265.489 521.141,235.336 541.897,180.086 562.652,132.988 583.408,98.6516 604.164,80.4384 622.519,79.2338 643.274,94.8438 664.03,126.95 684.786,172.408 705.541,226.77 718.557,263.047 733.577,304.834 754.333,358.633 775.089,403.106 795.844,433.899 816.6,448 836.977,444.262 857.733,422.912 878.489,385.946 899.244,336.979 920,280.807"/>
+<line x1="760" y1="64" x2="786" y2="64" stroke="#0b6e99" stroke-width="3"/>
+<text x="792" y="68" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">Vin</text>
+<polyline fill="none" stroke="#d1495b" stroke-width="2.2" points="96,263.363 116.756,243.484 137.511,242.661 158.267,242.297 179.023,242.12 199.778,242.066 220.534,242.12 241.29,242.297 262.045,242.661 282.801,243.484 300.804,255.643 311.363,281.12 332.118,283.652 352.874,284.232 373.63,284.512 394.385,284.639 413.471,284.655 434.226,284.567 454.982,284.345 475.738,283.897 496.493,282.704 510.355,265.489 521.141,244.801 541.897,242.985 562.652,242.454 583.408,242.194 604.164,242.08 622.519,242.073 643.274,242.169 664.03,242.403 684.786,242.876 705.541,244.215 718.557,263.047 733.577,282.737 754.333,283.906 775.089,284.35 795.844,284.569 816.6,284.655 836.977,284.633 857.733,284.497 878.489,284.201 899.244,283.583 920,279.788"/>
+<line x1="760" y1="84" x2="786" y2="84" stroke="#d1495b" stroke-width="3"/>
+<text x="792" y="88" text-anchor="start" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">Vout</text>
+<text x="508" y="504" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="normal" fill="#333">Time (s)</text>
+<text x="22" y="263" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="14" fill="#333" transform="rotate(-90 22 263)">Voltage (V)</text>
+</svg>

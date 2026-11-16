@@ -484,13 +484,19 @@ ACResult ACAnalysis::run(bool use_mpi) {
         // sweep instead of one per frequency.
         std::vector<double> local;
         std::vector<double> gathered;
-        size_t emitted = 0;
         for (int b_lo = lo_i; b_lo < hi_i; b_lo += static_cast<int>(block)) {
             const int b_hi = std::min(hi_i, b_lo + static_cast<int>(block));
             const int items = b_hi - b_lo;
             std::vector<Row> rows(static_cast<size_t>(items));
             solveBlock(b_lo, items, rows);
 
+            // The block [b_lo, b_hi) is partitioned among the ranks, so every
+            // frequency appears exactly once across the gathered chunks. They
+            // arrive GROUPED BY RANK (and each rank walks its own chunk
+            // offsets), which is not frequency order: collect the whole block
+            // and sort it back by global index before reporting.
+            std::vector<Row> block_rows;
+            block_rows.reserve(static_cast<size_t>(items));
             for (int c_lo = 0; c_lo < items; c_lo += kExchangeChunk_) {
                 const int c_hi = std::min(items, c_lo + kExchangeChunk_);
                 local.clear();
@@ -522,11 +528,16 @@ ACResult ACAnalysis::run(bool use_mpi) {
                         r.im.assign(gathered.begin() + static_cast<long>(off),
                                     gathered.begin() + static_cast<long>(off + take2));
                         off += take2;
-                        if (r.index != emitted) continue;   // defensive: no dupes
-                        report(r);
-                        ++emitted;
+                        block_rows.push_back(r);
                     }
                 }
+            }
+            std::sort(block_rows.begin(), block_rows.end(),
+                      [](const Row& a, const Row& b) {
+                          return a.index < b.index;
+                      });
+            for (const Row& r : block_rows) {
+                report(r);
             }
         }
     }

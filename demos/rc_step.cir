@@ -1,0 +1,17 @@
+* Demo: RC low-pass step response
+*
+*   V1 in 0 DC 5
+*   R1 in out 1k
+*   C1 out 0 1u IC=0
+*
+* Closed form:  v(out) = 5 * (1 - exp(-t/RC)),   RC = 1 ms
+*
+* Run:
+*   ./build/e-XSpice file demos/rc_step.cir rc_step.csv
+
+V1 in 0 DC 5
+R1 in out 1k
+C1 out 0 1u IC=0
+
+.TRAN 1u 5m 0
+.END
